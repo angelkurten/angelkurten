@@ -3,8 +3,55 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Angel Kürten</title>
-  <meta name="description" content="Angel Kürten — Engineering Leader. Product Developer. I build things that work.">
+  <title>Angel Kürten — Engineering Leader &amp; Product Developer</title>
+  <meta name="description" content="Angel Kürten — Engineering Leader driving AI-first transformations and scalable distributed systems. Building end-to-end products across high-growth SaaS platforms.">
+  <meta name="author" content="Angel Kürten">
+  <meta name="theme-color" content="#000000">
+  <link rel="canonical" href="https://angelkurten.com/">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Angel Kürten — Engineering Leader &amp; Product Developer">
+  <meta property="og:description" content="Engineering Leader driving AI-first transformations and scalable distributed systems. I build things that work.">
+  <meta property="og:type" content="profile">
+  <meta property="og:url" content="https://angelkurten.com/">
+  <meta property="og:site_name" content="Angel Kürten">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:locale:alternate" content="es_ES">
+  <meta property="profile:first_name" content="Angel">
+  <meta property="profile:last_name" content="Kürten">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Angel Kürten — Engineering Leader &amp; Product Developer">
+  <meta name="twitter:description" content="Engineering Leader driving AI-first transformations and scalable distributed systems. I build things that work.">
+
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    "dateCreated": "2026-03-04",
+    "dateModified": "2026-03-04",
+    "mainEntity": {
+      "@type": "Person",
+      "name": "Angel Kürten",
+      "url": "https://angelkurten.com",
+      "email": "mailto:angelkurten@gmail.com",
+      "jobTitle": "Engineering Manager",
+      "description": "Engineering Leader driving AI-first transformations and scalable distributed systems across high-growth SaaS platforms.",
+      "knowsLanguage": ["en", "es"],
+      "worksFor": {
+        "@type": "Organization",
+        "name": "ORBIDI / PLINNG"
+      },
+      "sameAs": [
+        "https://linkedin.com/in/angelkurten"
+      ]
+    }
+  }
+  </script>
+
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
@@ -271,6 +318,28 @@
       transform: translateY(0);
     }
 
+    /* ---- ACCESSIBILITY ---- */
+
+    :focus-visible {
+      outline: 2px solid var(--white);
+      outline-offset: 4px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+      .hero__scroll-line {
+        animation: none;
+        opacity: 1;
+      }
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
     /* ---- DESKTOP ---- */
 
     @media (min-width: 768px) {
@@ -339,29 +408,31 @@
   </nav>
 
   <!-- HERO -->
-  <section class="hero">
+  <header class="hero" role="banner">
     <h1 class="hero__name reveal">Angel<br>Kürten</h1>
     <p class="hero__tagline reveal" data-i18n="hero.tagline">Engineering Leader. Product Developer.<br>I build things that work.</p>
-    <div class="hero__scroll">
+    <div class="hero__scroll" aria-hidden="true">
       <span class="hero__scroll-line"></span>
       <span data-i18n="hero.scroll">Scroll</span>
     </div>
-  </section>
+  </header>
+
+  <main>
 
   <!-- ABOUT -->
-  <section class="about">
-    <p class="section-label reveal" data-i18n="about.label">About</p>
+  <section class="about" id="about" aria-labelledby="about-heading">
+    <h2 class="section-label reveal" id="about-heading" data-i18n="about.label">About</h2>
     <p class="about__text reveal" data-i18n="about.text">I've spent years building distributed systems, scaling engineering teams, and embedding AI into real products. Then I realized the line between product and technology <em>doesn't exist anymore</em> — and I stopped pretending it does. Today I define, build, and ship. End to end. Alone or leading teams.</p>
   </section>
 
   <!-- EXPERIENCE -->
-  <section class="experience">
-    <p class="section-label reveal" data-i18n="experience.label">Experience</p>
+  <section class="experience" id="experience" aria-labelledby="experience-heading">
+    <h2 class="section-label reveal" id="experience-heading" data-i18n="experience.label">Experience</h2>
     <ul class="timeline">
 
       <li class="timeline__item reveal">
         <div class="timeline__meta">
-          <p class="timeline__period" data-i18n="exp.0.period">Sep 2023 — Present</p>
+          <p class="timeline__period" data-i18n="exp.0.period"><time datetime="2023-09">Sep 2023</time> — Present</p>
         </div>
         <div>
           <h3 class="timeline__role" data-i18n="exp.0.role">Engineering Manager <span class="timeline__company">— ORBIDI / PLINNG</span></h3>
@@ -371,7 +442,7 @@
 
       <li class="timeline__item reveal">
         <div class="timeline__meta">
-          <p class="timeline__period" data-i18n="exp.1.period">May 2022 — Aug 2023</p>
+          <p class="timeline__period" data-i18n="exp.1.period"><time datetime="2022-05">May 2022</time> — <time datetime="2023-08">Aug 2023</time></p>
         </div>
         <div>
           <h3 class="timeline__role" data-i18n="exp.1.role">Senior Engineering Manager <span class="timeline__company">— Crehana</span></h3>
@@ -381,7 +452,7 @@
 
       <li class="timeline__item reveal">
         <div class="timeline__meta">
-          <p class="timeline__period" data-i18n="exp.2.period">Jun 2021 — Apr 2022</p>
+          <p class="timeline__period" data-i18n="exp.2.period"><time datetime="2021-06">Jun 2021</time> — <time datetime="2022-04">Apr 2022</time></p>
         </div>
         <div>
           <h3 class="timeline__role" data-i18n="exp.2.role">Engineering Manager <span class="timeline__company">— Muni Tienda</span></h3>
@@ -391,7 +462,7 @@
 
       <li class="timeline__item reveal">
         <div class="timeline__meta">
-          <p class="timeline__period" data-i18n="exp.3.period">Jun 2019 — May 2021</p>
+          <p class="timeline__period" data-i18n="exp.3.period"><time datetime="2019-06">Jun 2019</time> — <time datetime="2021-05">May 2021</time></p>
         </div>
         <div>
           <h3 class="timeline__role" data-i18n="exp.3.role">Principal Engineer & Technical Product Manager <span class="timeline__company">— Mensajeros Urbanos</span></h3>
@@ -401,7 +472,7 @@
 
       <li class="timeline__item reveal">
         <div class="timeline__meta">
-          <p class="timeline__period" data-i18n="exp.4.period">Apr 2016 — May 2019</p>
+          <p class="timeline__period" data-i18n="exp.4.period"><time datetime="2016-04">Apr 2016</time> — <time datetime="2019-05">May 2019</time></p>
         </div>
         <div>
           <h3 class="timeline__role" data-i18n="exp.4.role">Head of Technology <span class="timeline__company">— Orange Developers</span></h3>
@@ -411,7 +482,7 @@
 
       <li class="timeline__item reveal">
         <div class="timeline__meta">
-          <p class="timeline__period" data-i18n="exp.5.period">May 2009 — Apr 2016</p>
+          <p class="timeline__period" data-i18n="exp.5.period"><time datetime="2009-05">May 2009</time> — <time datetime="2016-04">Apr 2016</time></p>
         </div>
         <div>
           <h3 class="timeline__role" data-i18n="exp.5.role">Backend Developer <span class="timeline__company">— Freelance</span></h3>
@@ -422,13 +493,15 @@
     </ul>
   </section>
 
+  </main>
+
   <!-- FOOTER -->
   <footer class="footer">
-    <div class="footer__links">
+    <address class="footer__links">
       <a href="mailto:angelkurten@gmail.com">angelkurten@gmail.com</a>
       <a href="https://linkedin.com/in/angelkurten" target="_blank" rel="noopener">LinkedIn</a>
-    </div>
-    <span class="footer__copy">&copy; 2026</span>
+    </address>
+    <small class="footer__copy">&copy; 2026</small>
   </footer>
 
   <script>
