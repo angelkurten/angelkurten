@@ -1,0 +1,234 @@
+---
+title: "Patterns for Building Scalable Distributed Systems"
+date: 2026-01-20
+description: "Practical patterns and strategies for designing backend systems that handle growth without collapsing under their own weight."
+tags: [architecture, backend, scalability]
+published: true
+---
+
+Most systems do not start with scale problems. They start with a monolith that works fine until it does not. The challenge is recognizing when to introduce distributed patterns and which ones actually solve your specific bottlenecks rather than adding unnecessary complexity.
+
+## Start with the Monolith
+
+There is a strong case for beginning with a well-structured monolith. A monolith gives you:
+
+- Simpler deployment and debugging
+- Lower operational overhead
+- Faster iteration in early stages
+- Easier refactoring when boundaries are unclear
+
+The key is building the monolith with clear module boundaries so extraction into services is possible later.
+
+```typescript
+// A well-structured module boundary in a monolith
+// Each domain module exposes a clean interface
+export interface OrderService {
+  createOrder(input: CreateOrderInput): Promise<Order>;
+  getOrder(id: string): Promise<Order | null>;
+  cancelOrder(id: string): Promise<void>;
+}
+
+export interface InventoryService {
+  checkAvailability(productId: string, quantity: number): Promise<boolean>;
+  reserveStock(productId: string, quantity: number): Promise<Reservation>;
+  releaseReservation(reservationId: string): Promise<void>;
+}
+```
+
+When each module communicates through defined interfaces, extracting them into separate services later becomes a matter of replacing in-process calls with network calls.
+
+## Event-Driven Architecture
+
+Once you outgrow the monolith, event-driven architecture is one of the most effective patterns for decoupling services. Instead of direct service-to-service calls, services publish events that other services consume.
+
+### The Event Bus Pattern
+
+```typescript
+interface DomainEvent {
+  type: string;
+  timestamp: Date;
+  aggregateId: string;
+  payload: Record<string, unknown>;
+}
+
+// Producer: Order service publishes an event
+async function completeOrder(orderId: string): Promise<void> {
+  const order = await orderRepository.findById(orderId);
+  order.markCompleted();
+  await orderRepository.save(order);
+
+  await eventBus.publish({
+    type: "order.completed",
+    timestamp: new Date(),
+    aggregateId: order.id,
+    payload: {
+      customerId: order.customerId,
+      items: order.items,
+      total: order.total,
+    },
+  });
+}
+
+// Consumer: Notification service reacts to the event
+eventBus.subscribe("order.completed", async (event: DomainEvent) => {
+  const { customerId, total } = event.payload;
+  await notificationService.sendOrderConfirmation(customerId, total);
+});
+```
+
+### Benefits and Trade-offs
+
+Events decouple your services temporally and spatially. The order service does not need to know about the notification service, and events can be processed asynchronously. However, this introduces eventual consistency, which means you need to handle cases where data is temporarily out of sync.
+
+## The CQRS Pattern
+
+Command Query Responsibility Segregation separates read and write operations into different models. This is useful when your read patterns differ significantly from your write patterns.
+
+### When CQRS Makes Sense
+
+- Read-heavy workloads with complex queries
+- Different scaling requirements for reads vs writes
+- Multiple read representations of the same data
+- Event-sourced systems where the write model is an event log
+
+```typescript
+// Write side: optimized for consistency and business rules
+interface CommandHandler {
+  handle(command: PlaceOrderCommand): Promise<void>;
+}
+
+class PlaceOrderHandler implements CommandHandler {
+  async handle(command: PlaceOrderCommand): Promise<void> {
+    const order = Order.create(command);
+    await this.repository.save(order);
+    await this.eventStore.append(order.uncommittedEvents());
+  }
+}
+
+// Read side: optimized for query performance
+interface OrderReadModel {
+  id: string;
+  customerName: string;
+  itemCount: number;
+  total: number;
+  status: string;
+  createdAt: Date;
+}
+
+async function getOrderSummaries(
+  customerId: string
+): Promise<OrderReadModel[]> {
+  return db.query(
+    "SELECT * FROM order_summaries WHERE customer_id = $1 ORDER BY created_at DESC",
+    [customerId]
+  );
+}
+```
+
+The read model is a denormalized projection that gets updated whenever relevant events are processed. It can be a different database entirely, optimized for your specific query patterns.
+
+## Handling Distributed Failures
+
+In distributed systems, failures are not exceptional. They are expected. The question is how you handle them.
+
+### Circuit Breaker Pattern
+
+A circuit breaker prevents cascading failures by stopping calls to a failing service:
+
+```typescript
+class CircuitBreaker {
+  private failures = 0;
+  private lastFailure: Date | null = null;
+  private state: "closed" | "open" | "half-open" = "closed";
+
+  constructor(
+    private threshold: number = 5,
+    private resetTimeout: number = 30000
+  ) {}
+
+  async call<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.state === "open") {
+      if (Date.now() - this.lastFailure!.getTime() > this.resetTimeout) {
+        this.state = "half-open";
+      } else {
+        throw new Error("Circuit breaker is open");
+      }
+    }
+
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      this.onFailure();
+      throw error;
+    }
+  }
+
+  private onSuccess(): void {
+    this.failures = 0;
+    this.state = "closed";
+  }
+
+  private onFailure(): void {
+    this.failures++;
+    this.lastFailure = new Date();
+    if (this.failures >= this.threshold) {
+      this.state = "open";
+    }
+  }
+}
+```
+
+### Retry with Exponential Backoff
+
+For transient failures, retrying with increasing delays prevents thundering herd problems:
+
+```typescript
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Unreachable");
+}
+```
+
+The random jitter prevents multiple clients from retrying at exactly the same intervals, which would just shift the load spike.
+
+## Database Scaling Strategies
+
+### Read Replicas
+
+The simplest scaling strategy is adding read replicas. Direct all writes to the primary and distribute reads across replicas. This works well when reads outnumber writes significantly, which is the case for most applications.
+
+### Sharding
+
+When a single database cannot handle your write volume, you need to partition data across multiple databases. The sharding key selection is critical:
+
+- **User ID** works well for multi-tenant systems
+- **Geographic region** works for location-based data
+- **Time-based** works for append-heavy workloads like logs
+
+The downside is that cross-shard queries become expensive or impossible, so choose your shard key based on your most common access patterns.
+
+## Practical Advice
+
+After working with distributed systems across different scales, a few lessons stand out:
+
+1. **Measure before optimizing.** Instrument your system and let the data tell you where the bottlenecks actually are.
+2. **Prefer boring technology.** PostgreSQL, Redis, and a message queue solve most problems. Exotic databases solve exotic problems you probably do not have.
+3. **Design for failure.** Every network call can fail. Every service can go down. Build your system assuming these failures will happen.
+4. **Keep services coarse-grained.** Microservices that are too small create more problems than they solve. If two services always deploy together, they should be one service.
+5. **Invest in observability.** Distributed tracing, structured logging, and metrics dashboards are not optional at scale. You cannot fix what you cannot see.
+
+The goal is not to build the most sophisticated distributed system. The goal is to build one that reliably serves your users while remaining maintainable by your team.
