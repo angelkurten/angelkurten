@@ -1,0 +1,206 @@
+---
+title: "Stop Being a Headless Monkey: How Developers Should Use AI"
+date: 2026-03-06
+description: "AI coding assistants are powerful, but using them without structure leads to unmaintainable code, eroded skills, and team dysfunction. Here is how to use AI deliberately."
+tags: [ai, best-practices, team, engineering]
+published: true
+---
+
+There is a new kind of developer emerging in our industry. They copy-paste prompts into ChatGPT, accept the first response without reading it, commit the code, and move on. When something breaks, they paste the error back into the chat and repeat the cycle. They have no idea what their own codebase does anymore.
+
+I call this the headless monkey workflow. And it is spreading fast.
+
+AI coding assistants are genuinely powerful tools. They can accelerate prototyping, help you explore unfamiliar APIs, and automate repetitive tasks. But power without discipline is not productivity—it is chaos with extra steps.
+
+## The Problem Is Not AI. The Problem Is Abdication.
+
+Let me be clear: I am not against using AI for development. I use it daily. The problem is when developers stop thinking and start delegating their judgment entirely to a language model.
+
+Here is what the headless monkey workflow looks like in practice:
+
+- **No context given**: "Fix this bug" with a 200-line paste and zero explanation of intent
+- **No review of output**: The generated code compiles, so it ships
+- **No understanding**: The developer cannot explain what the code does or why it was written that way
+- **No integration thinking**: The AI-generated code ignores existing patterns, naming conventions, and architectural decisions
+
+The result is not faster development. It is technical debt at machine speed.
+
+## Consequences on the Codebase
+
+When AI-generated code enters a project without human curation, the symptoms are predictable:
+
+### Inconsistent Patterns
+
+AI models do not remember your project conventions unless you tell them every time. One module uses factory functions, the next uses classes, the third uses a pattern the model invented from its training data. The codebase starts looking like it was written by 15 different people—because, in a way, it was.
+
+```typescript
+// File A: factory pattern (existing convention)
+export function createUserService(db: Database) {
+  return {
+    getUser: (id: string) => db.query('users', id),
+    updateUser: (id: string, data: UserUpdate) => db.update('users', id, data),
+  };
+}
+
+// File B: AI-generated, ignores project conventions
+export class UserManager {
+  private static instance: UserManager;
+  private constructor(private readonly database: Database) {}
+
+  static getInstance(db: Database): UserManager {
+    if (!UserManager.instance) {
+      UserManager.instance = new UserManager(db);
+    }
+    return UserManager.instance;
+  }
+
+  async fetchUserById(userId: string): Promise<User | null> {
+    return this.database.query('users', userId);
+  }
+}
+```
+
+Both work. Neither is wrong in isolation. But together, they create cognitive overhead for every developer who touches the code afterward.
+
+### Over-Engineering
+
+AI models love to show off. Ask for a simple utility function and you might get a generic, configurable, extensible framework with three levels of abstraction. The model is optimizing for looking thorough, not for fitting your actual needs.
+
+```typescript
+// What you needed
+function formatCurrency(amount: number): string {
+  return `$${amount.toFixed(2)}`;
+}
+
+// What the AI gave you
+interface CurrencyFormatterOptions {
+  locale?: string;
+  currency?: string;
+  minimumFractionDigits?: number;
+  maximumFractionDigits?: number;
+  useGrouping?: boolean;
+  notation?: 'standard' | 'scientific' | 'engineering' | 'compact';
+}
+
+class CurrencyFormatter {
+  private static readonly DEFAULT_OPTIONS: CurrencyFormatterOptions = {
+    locale: 'en-US',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    useGrouping: true,
+    notation: 'standard',
+  };
+
+  private readonly formatter: Intl.NumberFormat;
+
+  constructor(options: Partial<CurrencyFormatterOptions> = {}) {
+    const merged = { ...CurrencyFormatter.DEFAULT_OPTIONS, ...options };
+    this.formatter = new Intl.NumberFormat(merged.locale, {
+      style: 'currency',
+      currency: merged.currency,
+      minimumFractionDigits: merged.minimumFractionDigits,
+      maximumFractionDigits: merged.maximumFractionDigits,
+      useGrouping: merged.useGrouping,
+      notation: merged.notation,
+    });
+  }
+
+  format(amount: number): string {
+    return this.formatter.format(amount);
+  }
+}
+```
+
+You asked for three lines. You got forty. And now someone on your team has to maintain a `CurrencyFormatter` class that nobody asked for.
+
+### Hidden Bugs With Confident Syntax
+
+AI-generated code compiles. It often looks correct. It passes a surface-level review. But it can contain subtle logic errors that are hard to catch precisely because the code is syntactically clean.
+
+The developer who wrote it cannot catch these bugs because they did not write it—they accepted it. And code review becomes harder because the reviewer is now auditing machine output they also did not write, in a pattern they did not choose.
+
+## Consequences on the Team
+
+The codebase damage is visible. The team damage is quieter and worse.
+
+### Skill Erosion
+
+Developers who rely on AI for every task stop building mental models of their systems. They lose the ability to debug without a chatbot. They cannot whiteboard a solution in a meeting or reason about trade-offs without generating code first.
+
+This is not hypothetical. I have seen senior developers struggle to write a basic SQL join after months of AI-assisted development. The muscle atrophies when you stop using it.
+
+### Review Bottlenecks
+
+When AI generates large chunks of code that the author does not fully understand, code reviews become a nightmare. The reviewer is essentially auditing code that nobody on the team truly wrote. Review times increase, review quality decreases, and resentment builds.
+
+### Knowledge Silos of Ignorance
+
+In a healthy team, the person who wrote the code can explain it. With headless AI usage, you get a different kind of silo—one where nobody can explain the code. The AI generated it, the developer committed it, and now it is everybody's problem and nobody's understanding.
+
+### False Velocity
+
+The team appears to be shipping faster. Tickets are closed. Features are merged. But the bug count rises, the incident frequency increases, and the time to make changes grows. You borrowed speed from the future, and the interest rate is brutal.
+
+## How to Use AI Like an Engineer
+
+The alternative is not to stop using AI. It is to use it with the same discipline you apply to every other tool in your workflow.
+
+### 1. Provide Context, Not Just Code
+
+Before asking AI to help, frame the problem. Explain the architecture, the conventions, the constraints. A well-structured prompt is not laziness—it is engineering.
+
+> "We use factory functions for services, Zod for validation, and repository pattern for data access. Generate a service for handling invoice creation that follows these patterns."
+
+This takes 30 seconds more than "write an invoice service" and saves hours of refactoring.
+
+### 2. Read Every Line Before You Commit
+
+If you cannot explain what a piece of code does, you should not commit it. Period. This is true whether you wrote it, a coworker wrote it, or an AI wrote it.
+
+Treat AI output the way you treat a pull request from a new hire: with respect, but also with scrutiny.
+
+### 3. Keep Your Architecture Decisions Documented
+
+AI cannot read your team's minds. But it can read a document. Maintain an architecture decision record (ADR) or a coding conventions guide, and reference it in your prompts. Some AI tools even allow you to load project context automatically—use that.
+
+### 4. Use AI for Acceleration, Not Replacement
+
+The best use of AI is to speed up tasks where you already know the solution but want to avoid typing boilerplate. The worst use is to generate solutions for problems you do not understand yet.
+
+- **Good**: "Generate the Zod schema for this TypeScript interface" — you know the types, you just want the translation
+- **Bad**: "Design the authentication system for my app" — you need to understand the trade-offs before any code is written
+
+### 5. Review AI Code More Strictly, Not Less
+
+There is a psychological tendency to trust AI output because it looks polished. Fight that instinct. AI-generated code deserves more scrutiny, not less, because:
+
+- It was not written with your specific runtime context in mind
+- It may use deprecated APIs from its training data
+- It optimizes for plausibility, not correctness
+
+### 6. Pair AI With Your Brain, Not Instead of It
+
+The most productive workflow I have found is: think first, then use AI to accelerate execution. Sketch the solution on paper or in your head. Decide on the approach. Then use AI to help you implement it faster.
+
+This is fundamentally different from "ask AI what to do." You remain the architect. The AI is your power tool, not your replacement.
+
+## A Simple Litmus Test
+
+Before you commit any AI-generated code, ask yourself these three questions:
+
+1. **Can I explain this code to a teammate without looking at it?**
+2. **Does this follow the patterns already established in the project?**
+3. **Would I approve this in a code review if someone else submitted it?**
+
+If the answer to any of these is no, you are not done. The AI gave you a draft. Now do the engineering.
+
+## The Real Risk
+
+The real danger is not that AI will replace developers. It is that developers will let AI make them replaceable. A developer who cannot think without a chatbot, who cannot debug without pasting errors, who cannot design without generating code—that developer has given away the only thing that made them valuable.
+
+The tools are here to stay. They will only get better. But tools do not build systems—engineers do. And engineers think before they act.
+
+Be structured. Be deliberate. Be the developer who uses AI as a force multiplier, not as a crutch.
+
+Your codebase—and your team—will thank you.
