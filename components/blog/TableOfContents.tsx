@@ -34,7 +34,7 @@ export function TableOfContents({ items }: TableOfContentsProps) {
   if (items.length === 0) return null;
 
   return (
-    <nav className="hidden xl:block" aria-label="Table of contents">
+    <nav className="hidden w-64 shrink-0 lg:block" aria-label="Table of contents">
       <div className="sticky top-24">
         <p className="mb-4 text-sm font-medium">On this page</p>
         <ul className="space-y-2 text-sm">

@@ -15,8 +15,8 @@ export function ResponsiveImage({ src, alt, width = 800, height = 400 }: Respons
         alt={alt}
         width={width}
         height={height}
-        className="rounded-lg"
-        sizes="(max-width: 768px) 100vw, 800px"
+        className="h-auto max-w-full rounded-lg"
+        sizes="(max-width: 768px) 100vw, (max-width: 1024px) 90vw, 768px"
       />
       {alt && <figcaption className="mt-2 text-center text-sm text-neutral-500">{alt}</figcaption>}
     </figure>

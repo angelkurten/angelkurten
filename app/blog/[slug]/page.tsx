@@ -67,17 +67,17 @@ export default async function PostPage({ params }: PageProps) {
   return (
     <div className="min-h-screen">
       <Header />
-      <main className="mx-auto max-w-7xl px-4 py-16">
+      <main className="mx-auto max-w-7xl px-6 py-8 sm:py-16">
         <div className="relative flex gap-12">
-          <article className="mx-auto max-w-3xl flex-1">
+          <article className="mx-auto max-w-3xl flex-1 min-w-0">
             <header className="mb-8">
               <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
                 <time dateTime={post.date}>{formatDate(post.date)}</time>
                 <span>·</span>
                 <span>{post.readingTime}</span>
               </div>
-              <h1 className="mt-4 text-4xl font-bold tracking-tight">{post.title}</h1>
-              <p className="mt-4 text-lg text-neutral-600 dark:text-neutral-400">
+              <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl">{post.title}</h1>
+              <p className="mt-4 text-base text-neutral-600 dark:text-neutral-400 sm:text-lg">
                 {post.description}
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -86,7 +86,7 @@ export default async function PostPage({ params }: PageProps) {
                 ))}
               </div>
             </header>
-            <div className="prose prose-neutral max-w-none dark:prose-invert prose-headings:scroll-mt-20">
+            <div className="prose prose-neutral max-w-none dark:prose-invert prose-headings:scroll-mt-20 prose-pre:max-w-[calc(100vw-3rem)] prose-img:max-w-full prose-img:h-auto">
               <MdxContent code={post.body.code} />
             </div>
             <PostNavigation

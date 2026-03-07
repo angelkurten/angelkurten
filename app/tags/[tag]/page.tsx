@@ -33,7 +33,7 @@ export default async function TagPage({ params }: PageProps) {
   return (
     <div className="min-h-screen">
       <Header />
-      <main className="mx-auto max-w-3xl px-4 py-16">
+      <main className="mx-auto max-w-3xl px-6 py-8 sm:py-16">
         <h1 className="text-3xl font-bold tracking-tight">
           Tagged &ldquo;{tag}&rdquo;
         </h1>
