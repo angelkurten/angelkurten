@@ -22,6 +22,9 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   return {
     title: `Blog - Page ${num}`,
     description: `Blog posts - page ${num}`,
+    alternates: {
+      canonical: `https://angelkurten.com/blog/page/${num}`,
+    },
   };
 }
 

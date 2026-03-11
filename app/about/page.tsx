@@ -7,6 +7,9 @@ export const metadata: Metadata = {
   title: "About",
   description:
     "Angel Kurten — Engineering Leader building distributed systems, scaling teams, and shipping AI-driven products end to end.",
+  alternates: {
+    canonical: "https://angelkurten.com/about",
+  },
 };
 
 export default function AboutPage() {

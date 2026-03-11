@@ -47,6 +47,7 @@ export const metadata: Metadata = {
     follow: true,
   },
   alternates: {
+    canonical: "https://angelkurten.com",
     types: {
       "application/rss+xml": "/feed.xml",
     },

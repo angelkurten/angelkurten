@@ -7,6 +7,9 @@ import { getPaginatedPosts, getPublishedPosts } from "@/lib/blog";
 export const metadata: Metadata = {
   title: "Blog",
   description: "Thoughts on engineering leadership, system architecture, and building products.",
+  alternates: {
+    canonical: "https://angelkurten.com/blog",
+  },
 };
 
 export default function BlogPage() {

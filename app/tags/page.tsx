@@ -7,6 +7,9 @@ import { getAllTags } from "@/lib/blog";
 export const metadata: Metadata = {
   title: "Tags",
   description: "Browse blog posts by topic.",
+  alternates: {
+    canonical: "https://angelkurten.com/tags",
+  },
 };
 
 export default function TagsPage() {
