@@ -1,0 +1,337 @@
+---
+title: "Turning Code Repos Into Knowledge: Auto-Generating Architecture Docs With AI"
+date: 2026-03-11
+description: "I needed my AI assistant to answer architecture questions, but every coding tool I tried understood individual files and failed at the big picture. So I built a system that auto-generates comprehensive architecture documents from code repositories using hybrid AST extraction and LLM synthesis. Here is how it works and what I learned."
+tags: [ai, developer-tools, architecture, rag, github]
+published: true
+---
+
+There is a gap in my organization that I stopped pretending does not exist. I have the code. Thousands of files, hundreds of modules, years of accumulated decisions. And I have people—new hires, adjacent teams, my future self—who need to understand what that code actually does at a system level. The code exists. The understanding does not.
+
+Documentation is the obvious answer, but documentation has a fatal flaw: it decays. The moment someone writes an architecture doc, the codebase starts drifting away from it. Within weeks, the endpoints section is missing three new routes. Within months, the data model diagram is fiction. Within a year, the document is actively misleading. This is not a discipline problem. It is a structural one. Documentation that requires manual maintenance will always lose to the velocity of code changes.
+
+So I asked a different question: what if the code could document itself? Not inline comments or auto-generated API references—those already exist. I mean a comprehensive architecture document that describes what a repository does, how it is structured, what its data models look like, what its main flows are, and how its components relate to each other. Generated automatically. Updated on every push to main. Indexed for retrieval-augmented generation so an AI assistant can actually answer questions like "how does authentication work in our backend?"
+
+I built this system. It works. And getting there required understanding why every existing tool falls short of this specific problem.
+
+## The Tools That Exist Today (And What They Actually Do)
+
+Before building anything, I researched seven tools that claim to solve "codebase understanding" in various ways. The landscape is impressive, but none of them do what I needed.
+
+### The Competitive Landscape
+
+**[Aider](https://aider.chat/2023/10/22/repomap.html)** comes closest to my goal. It builds a `repo-map` using Tree-Sitter to parse source code into ASTs, then applies PageRank on a graph where files are nodes and edges represent dependencies. The result is a ranked map of the most important symbols in the codebase, optimized to fit within a token budget. This is genuinely clever—it identifies the most-referenced functions and classes to give an LLM a compressed view of the repo. But it produces a symbol map, not an architecture document. It tells you what exists, not what it means or how it fits together.
+
+**[CodeRabbit](https://lancedb.com/blog/case-study-coderabbit/)** builds a dependency graph using AST analysis and stores context in LanceDB for sub-second retrieval across 50,000+ daily PRs. Their context engineering framework breaks information into Intent, Environment, and Conversation layers. Impressive for code review—they maintain a 1:1 ratio of code to context in their LLM prompts. But they reconstruct this graph per review. There is no persistent architecture document. The understanding is ephemeral, rebuilt on every pull request.
+
+**[Greptile](https://www.greptile.com)** builds a full knowledge graph of codebases using AST extraction, linters, and LLM analysis. They achieve cross-file understanding and can catch bugs that span module boundaries. This is the most infrastructure-heavy approach—a real-time, always-current graph of your entire codebase. But it is a code review tool, not a documentation generator. The knowledge stays inside Greptile's system.
+
+**[Sourcegraph Cody](https://sourcegraph.com/blog/keeping-it-boring-and-relevant-with-bm25f)** made a fascinating strategic decision: they abandoned vector embeddings entirely for their enterprise search in favor of BM25 keyword search. The reasoning was pragmatic—[maintaining embeddings and searching vector databases for codebases with 100,000+ repositories](https://sourcegraph.com/docs/cody/core-concepts/keyword-search) introduced too much complexity and limited their multi-repository context features. This is an important lesson: embeddings are not always superior to keyword search for code, especially at scale.
+
+**[Augment Code](https://www.augmentcode.com/tools/github-copilot-vs-augment-code)** processes entire codebases across 400,000+ files through their Context Engine, achieving a 70.6% SWE-bench accuracy score. They understand architectural patterns and cross-service dependencies. But again—the understanding lives inside their system. There is no exported document, no artifact you can query independently.
+
+**GitHub Copilot Workspace** handles complete development cycles but treats [each repository as an isolated context boundary](https://www.augmentcode.com/tools/github-copilot-vs-augment-code). It cannot understand shared libraries across repos, cross-repository patterns, or service dependencies in microservices architectures.
+
+**[Sweep AI](https://www.qodo.ai/blog/greptile-alternatives/)** automates PR reviews and fixes using AST-based chunking that respects syntactic structure—a pattern later adopted by LlamaIndex for code RAG. Good for per-PR context, not for holistic understanding.
+
+### The Gap
+
+Here is what struck me after reviewing all seven: **no mainstream tool generates a persistent, comprehensive architecture document from a repository**. They all build internal representations—graphs, embeddings, symbol maps—to power their specific features (code review, completions, search). But none of them produce a standalone artifact that says: "here is what this repository does, how it is structured, what its API looks like, what its data models are, and how its main flows work."
+
+That artifact is exactly what a RAG system needs to answer architecture questions. And it does not exist.
+
+## Why Raw Code Is Bad RAG Context
+
+To understand why this matters, you need to understand what happens when you naively index code for RAG retrieval.
+
+My first approach was to clone a repository, split files into chunks, embed them, and store them in a vector database. When a user asked a question, the system retrieved the most similar chunks and fed them to the LLM.
+
+This sounds reasonable. It works terribly.
+
+A chunk like `def validate_token(token: str) -> bool` tells the LLM almost nothing. Where is this function called? What tokens does it validate? Is this part of the authentication flow or the API key system? Is it even used anymore? The raw code chunk is decontextualized noise. In [research on RAG for large-scale code repositories](https://www.qodo.ai/blog/rag-for-large-scale-code-repos/), one of the core findings is that naive chunking methods struggle with accurately delineating meaningful segments of code, and providing incomplete code segments to an LLM increases hallucinations.
+
+This is measurable. In the RAG system I was building, raw code chunks indexed with `source_type="git"` received a retrieval boost of 0.7—the lowest after Slack messages (0.4)—precisely because they produced low-quality context for the questions that mattered most. When I asked "how does our payment system work?", I got back individual function signatures and config snippets instead of a coherent explanation.
+
+The problem is not retrieval accuracy. The problem is that code chunks, even when accurately retrieved, do not contain the semantic information that answers architecture questions.
+
+## The Solution: Hybrid AST Extraction + LLM Synthesis
+
+The approach I built combines two phases: structural extraction without any LLM involvement, followed by LLM synthesis that turns that structure into a comprehensive architecture document.
+
+### Phase 1: Structural Extraction
+
+The first phase is deterministic and cheap. It scans the cloned repository and extracts structured information using heuristics and file pattern matching:
+
+```python
+class ArtifactGenerator:
+    """Generates SYSTEM_ARTIFACT.md for a repository."""
+
+    SKIP_DIRS = {
+        "node_modules", ".git", "__pycache__", ".venv",
+        "venv", "dist", "build", ".next", "coverage",
+    }
+
+    def extract_structure(self, repo_path: Path) -> dict:
+        """
+        Structural extraction without LLM:
+        - tree: filtered directory (max 3 levels, skip irrelevant dirs)
+        - deps: package.json / requirements.txt / go.mod -> dependency list
+        - models: files in models/, schemas/, migrations/ -> names
+        - routes: files in routes/, api/, controllers/ -> names
+        - config: .env.example, config.*, settings.* -> names
+        - tests: files in tests/, __tests__/ -> structure
+        - readme: README.md content if present
+        """
+        structure = {}
+        structure["tree"] = self._build_filtered_tree(repo_path, max_depth=3)
+        structure["deps"] = self._extract_dependencies(repo_path)
+        structure["models"] = self._find_files_in_dirs(
+            repo_path, ["models", "schemas", "migrations"]
+        )
+        structure["routes"] = self._find_files_in_dirs(
+            repo_path, ["routes", "api", "controllers"]
+        )
+        structure["config"] = self._find_config_files(repo_path)
+        structure["readme"] = self._read_readme(repo_path)
+        return structure
+
+    def select_key_files(self, repo_path: Path, structure: dict) -> list[dict]:
+        """
+        Select key files for LLM context:
+        - README.md (always)
+        - Primary config (package.json, requirements.txt, etc.)
+        - Top model files (up to 5)
+        - Top route/API files (up to 5)
+        - Top service files (up to 5)
+        Returns list[{"path": str, "content": str}], max ~20 files.
+        """
+        key_files = []
+        # README always first
+        readme_path = repo_path / "README.md"
+        if readme_path.exists():
+            key_files.append(self._read_file(readme_path))
+        # Config files, models, routes, services...
+        for category in ["deps", "models", "routes", "services"]:
+            files = self._prioritize_files(structure.get(category, []))
+            key_files.extend(files[:5])
+        return key_files[:20]  # Hard cap at 20 files
+```
+
+This is intentionally simple. No AST parsers per language, no complex dependency resolution, no external tools. Pattern matching on directory names and file extensions is enough to identify the important structural elements of most repositories. It runs in milliseconds and produces a structured summary that the LLM can reason about.
+
+### Phase 2: LLM Synthesis
+
+The second phase sends the extracted structure and key file contents to Claude Opus, which synthesizes a comprehensive architecture document:
+
+```python
+def generate_artifact(
+    self, repo: str, structure: dict, key_files: list[dict]
+) -> str:
+    """
+    Call Opus with the SYSTEM_ARTIFACT template.
+    Input: extracted structure + key file contents.
+    Output: complete SYSTEM_ARTIFACT.md (~200-500 lines).
+    """
+    prompt = f"""You are a software architecture analyst. From the structure
+and key files of a repository, generate a SYSTEM_ARTIFACT.md that documents
+the project architecture.
+
+The document must be:
+- Comprehensive but concise (200-500 lines)
+- Based ONLY on what you observe in the code (do not invent endpoints
+  or models that do not exist)
+- Useful for a RAG system answering questions about the project
+
+REPOSITORY STRUCTURE:
+{json.dumps(structure, indent=2)}
+
+KEY FILES:
+{self._format_key_files(key_files)}
+
+Generate the SYSTEM_ARTIFACT.md with these sections:
+1. Purpose
+2. Tech Stack
+3. Directory Structure
+4. Data Models
+5. API / Endpoints
+6. Main Services and Components
+7. Principal Flows
+8. External Dependencies
+9. Configuration
+10. Tests
+"""
+    response = self.llm_client.generate(
+        model="claude-opus-4-6",
+        prompt=prompt,
+        max_tokens=8000,
+    )
+    return response.content
+```
+
+The design decision to use Opus instead of a cheaper model was deliberate. Opus understands complex flows, relationships between components, and architectural patterns significantly better than smaller models. At roughly $0.30-0.50 per generation, the cost is acceptable because generation only happens on merges to main—not on every commit.
+
+Why not send the entire repository to the LLM? Cost and quality. Sending every file produces worse results because the LLM gets overwhelmed with irrelevant code (test utilities, config boilerplate, migration files). The hybrid approach—extracting structure first, selecting key files, then synthesizing—produces more focused and accurate documents while using fewer tokens.
+
+## The Dual-Indexing Strategy
+
+The generated artifact gets indexed for RAG retrieval alongside the raw code, but with different weights:
+
+```python
+type_boost = {
+    "notion": 0.8,
+    "git": 0.7,          # raw code chunks
+    "docs": 1.0,
+    "slack": 0.4,
+    "system_artifact": 1.0,  # architecture document - same as docs
+}.get(src_type, 0.5)
+```
+
+The artifact is indexed as `source_type="system_artifact"` with a boost of 1.0—the same weight as hand-written documentation. Raw code is re-indexed as `source_type="git"` at 0.7. Both live in the same ChromaDB collection, both are searchable, but the architecture document gets priority in retrieval ranking.
+
+This dual-indexing means that when someone asks "how does authentication work?", the RAG system returns the artifact's coherent explanation of the auth flow first, supplemented by specific code chunks if the user drills deeper. The artifact provides the map; the code provides the territory.
+
+The context builder uses intent detection to adjust retrieval:
+
+```python
+ARCHITECTURE_KEYWORDS = [
+    "architecture", "how does", "system", "flow", "endpoint",
+    "model", "structure", "component", "service", "design",
+    "stack", "dependency", "integration", "diagram", "overview",
+    # Spanish equivalents for bilingual teams
+    "arquitectura", "como funciona", "sistema", "flujo", "modelo",
+]
+
+def append_artifact_context(
+    tenant_id: str, query: str, context: str, sources: list, rag
+) -> tuple[str, list]:
+    """Add artifact chunks to context, boosted for architecture queries."""
+    is_arch_query = any(kw in query.lower() for kw in ARCHITECTURE_KEYWORDS)
+    top_k = 5 if is_arch_query else 2
+
+    extra, extra_sources = rag.retrieve_from_source_type(
+        tenant_id, query, source_type="system_artifact", top_k=top_k
+    )
+    if not extra:
+        return context, sources
+
+    header = "\n\n--- System Artifact Context (repository architecture) ---\n\n"
+    return (context + header + extra).strip(), sources + extra_sources
+```
+
+Architecture-intent queries retrieve 5 artifact chunks. General queries retrieve 2. This keeps the artifact context proportional to the user's actual need.
+
+## The Automation Pipeline
+
+The entire system is automated through GitHub webhooks. When a developer pushes to main, the pipeline triggers:
+
+1. GitHub sends a push event to the gateway endpoint
+2. The gateway validates HMAC-SHA256, checks the branch, and finds the owning tenant
+3. If the commit is new (not already processed), it triggers the generation task
+4. A Celery worker clones the repo, extracts structure, generates the artifact with Opus, indexes it in ChromaDB, and persists it in PostgreSQL
+5. The raw code is re-ingested in parallel
+
+```python
+@celery_app.task(name="artifact_generation_task", queue="ingest")
+def artifact_generation_task(
+    tenant_id: str,
+    repo: str,
+    commit_sha: str | None = None,
+    github_token: str | None = None,
+    also_ingest_code: bool = True,
+):
+    """
+    Full pipeline:
+    1. git clone --depth 1
+    2. extract_structure() - heuristics, no LLM
+    3. select_key_files() - max ~20 files
+    4. generate_artifact() - Opus generates SYSTEM_ARTIFACT.md
+    5. index_artifact() - index in ChromaDB (source_type=system_artifact)
+    6. Persist in PostgreSQL (github_artifacts table)
+    7. If also_ingest_code: trigger code re-ingest
+    8. Cleanup: shutil.rmtree(tmp_dir)
+    """
+```
+
+The webhook-based trigger means documentation stays current without any human intervention. Every merge to main produces a fresh architecture document within minutes. The documentation decay problem is structurally solved—the artifact is always derived from the current state of the code.
+
+Multi-tenancy is handled through per-tenant GitHub PATs encrypted with Fernet, stored in the gateway's database. Each tenant configures an allowlist of repositories they want documented. The webhook secret is unique per tenant, ensuring proper isolation.
+
+## The Bugs That Teach You the Most
+
+Two bugs surfaced post-implementation that are worth sharing because they illustrate the kind of subtle data integrity issues that arise in multi-source RAG systems.
+
+### Bug 1: The Vanishing Artifact
+
+The artifact generation pipeline had a step that re-ingested raw code alongside the architecture document. The problem: the existing `ingest_task` called `delete_by_source_repo(tenant_id, repo)` before re-indexing code—which deleted ALL chunks for that repo, including the freshly generated artifact. The architecture document lived in ChromaDB for approximately three seconds before being wiped by the code re-ingest that ran right after it.
+
+The fix was adding a `source_type` parameter to the deletion function:
+
+```python
+# Before (broken): deletes everything including system_artifact
+delete_by_source_repo(tenant_id, repo)
+
+# After (fixed): only deletes raw code chunks
+delete_by_source_repo(tenant_id, repo, source_type="git")
+```
+
+One parameter. Three seconds of artifact lifespan. Hours of debugging.
+
+### Bug 2: Cross-Repo Nuking
+
+When indexing a new artifact, the code called `delete_by_source_type(tenant_id, "system_artifact")` to clear the previous version. This deleted all `system_artifact` chunks for the entire tenant—not just the repo being updated. A tenant with five connected repositories would lose four artifacts every time one repository was updated.
+
+```python
+# Before (broken): nukes all artifacts for the tenant
+delete_by_source_type(tenant_id, "system_artifact")
+
+# After (fixed): only deletes artifacts for the specific repo
+delete_by_source(tenant_id, f"artifact:{repo}")
+```
+
+Both bugs share a root cause: deletion scope was too broad. In a multi-source RAG system where different source types coexist in the same vector store, every delete operation needs to be scoped as narrowly as possible. This is not obvious when you are building the happy path. It becomes painfully obvious when data starts disappearing.
+
+## What I Learned From the Industry Research
+
+Several insights from researching existing tools shaped the design decisions:
+
+**Sourcegraph's retreat from embeddings was clarifying.** They found that maintaining embeddings across 100,000+ repositories was more trouble than BM25 keyword search. For my use case—generating a document, not searching raw code—embeddings make sense because the artifact is prose, not code. But the lesson stands: do not default to vector search without considering whether simpler approaches work.
+
+**Aider's PageRank approach was inspiring but insufficient.** Ranking symbols by reference count identifies what is important in the code. But importance is not explanation. The most-referenced function might be a utility that is architecturally irrelevant. The hybrid approach—structural extraction for what exists, LLM synthesis for what it means—bridges that gap.
+
+**CodeRabbit's 1:1 code-to-context ratio validated the dual-indexing approach.** If the best code review tool needs as much context as code in its prompts, then a RAG system answering architecture questions needs even more. The architecture document is that context, pre-synthesized and ready for retrieval.
+
+**The [survey on retrieval-augmented code generation](https://arxiv.org/abs/2510.04905) confirmed that repository-level understanding is an open problem.** Most approaches treat repositories as flat document collections. Real understanding requires capturing inter-file dependencies, architectural patterns, and business logic—exactly what the SYSTEM_ARTIFACT is designed to encode.
+
+## Results
+
+After deploying the system across multiple repositories:
+
+- Architecture questions that previously returned decontextualized code snippets now return coherent, paragraph-level explanations
+- The artifact's retrieval boost (1.0 vs 0.7 for raw code) means architecture context appears first in RAG responses, with code details available for follow-up
+- The webhook-triggered regeneration keeps documentation within one merge of current
+- Generation cost averages $0.30-0.50 per artifact on Opus, triggered only on pushes to main
+- The entire pipeline—clone, extract, generate, index—completes in under two minutes for repositories with up to 500 files
+
+The most telling metric is qualitative: team members stopped asking "where is the documentation for X?" in Slack and started asking the AI assistant instead. The documentation exists because the code exists. No manual effort required.
+
+## Actionable Takeaways
+
+If you are building systems that need to understand code repositories, here is what I would carry forward:
+
+1. **Do not index raw code for architecture questions.** Code chunks are useful for "show me how function X works" but useless for "how does the payment system work." Generate a higher-level artifact and index that instead.
+
+2. **Hybrid extraction beats pure LLM.** Extracting structure with deterministic heuristics before sending to the LLM produces better results at lower cost than dumping the entire repo into a context window. Let the LLM synthesize, not search.
+
+3. **Dual-index with different boosts.** Keep both raw code and synthesized documents in your vector store, but weight them differently. Architecture documents at 1.0, raw code at 0.7. The user's intent determines which surfaces first.
+
+4. **Automate via webhooks, not schedules.** Documentation triggered by actual code changes is always current. Cron-based regeneration wastes resources and can be stale between runs.
+
+5. **Scope your deletions obsessively.** In a multi-source RAG system, every delete operation must specify exactly what it is deleting. Broad deletions will silently destroy data you did not intend to remove. Both bugs I encountered were scope-of-deletion problems.
+
+6. **Use the most capable model for generation, not the cheapest.** The artifact is a one-time generation per merge. The quality difference between Opus and a smaller model on architectural synthesis is significant. Save money on high-frequency, low-stakes tasks. Spend it on low-frequency, high-stakes ones.
+
+7. **Study what others built before building your own.** Aider's Tree-Sitter + PageRank approach, Sourcegraph's move from embeddings to BM25, CodeRabbit's context engineering framework—each of these informed a specific design decision. The best solutions are recombinations of existing ideas, not inventions from scratch.
+
+The gap between having code and understanding code is real, and it was costing my team time, onboarding quality, and decision-making speed. Auto-generated architecture documents do not solve the problem completely—they do not capture the "why" behind decisions, the trade-offs considered, the options rejected. But they solve the "what" and "how" at a level that did not exist before, and they do it without requiring anyone to write or maintain a single line of documentation.
+
+That is a meaningful step forward.

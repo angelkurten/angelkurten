@@ -1,0 +1,437 @@
+---
+title: "From 58% to 91% Retrieval Precision: A Practical RAG Guide"
+date: 2026-03-11
+description: "I shipped a naive RAG pipeline and called it done. Here is what actually broke in production, and the multi-stage architecture that took retrieval precision from 58% to 91%."
+tags: [ai, rag, backend, architecture, python]
+published: true
+---
+
+"We have RAG" is the new "we have tests." It tells you nothing about quality.
+
+I have spent the last few months rebuilding a production RAG pipeline for a team knowledge assistant. The starting point was a textbook implementation: user query goes into an embedding model, cosine similarity pulls the top-k chunks from ChromaDB, those chunks get stuffed into a prompt, and the LLM generates an answer. It worked. Sort of. Users got responses. Those responses were confidently wrong about 20% of the time, and the system had no idea which answers were good and which were hallucinated noise.
+
+When we finally measured retrieval precision properly, the number was 58%. That means nearly half the context fed to the language model was irrelevant. The LLM was doing its best to synthesize garbage into coherent-sounding answers, and it was disturbingly good at it.
+
+This post walks through what broke, what we did about it, and the concrete architecture that pushed retrieval precision to 91%. No hand-waving. Code included.
+
+## The Naive Pipeline and Why It Fails
+
+Every RAG tutorial teaches the same pipeline:
+
+```
+User Query → Embed → Cosine Search → Top-K Chunks → LLM → Response
+```
+
+This is what I call single-stage RAG, and it is exactly what I shipped to production. It worked well enough in demos with curated datasets. It failed in production with real users asking real questions against a messy, evolving knowledge base.
+
+Here are the five failure modes that compound over time:
+
+**1. No relevance threshold.** ChromaDB (and most vector stores) always returns top_k results, even when nothing in your corpus is remotely relevant. Ask about quantum physics against a codebase knowledge base, and you will get five chunks of whatever is least dissimilar. The LLM then grounds its response in those irrelevant chunks, producing what I call "hallucinations grounded in noise" -- answers that cite real documents but answer the wrong question.
+
+**2. Pure semantic search misses exact matches.** Dense embeddings capture meaning but struggle with exact terms -- function names, error codes, acronyms, product IDs. When a developer asks "what does `ERR_CONN_REFUSED` mean in our deploy pipeline," semantic search might return chunks about network connectivity in general rather than the specific error handling documentation.
+
+**3. Popularity-based reranking is orthogonal to relevance.** If you rank chunks by user feedback (thumbs up, emoji reactions), you are measuring popularity, not query-document relevance. A well-liked meeting summary about Q1 planning will outrank the perfectly relevant deployment guide simply because more people reacted to it.
+
+**4. No query transformation.** Real user queries are messy. "What was that thing Carlos mentioned about the API?" contains an anaphoric reference ("that thing"), a proper noun, and zero technical terms. Sending this directly to an embedding model produces a low-quality vector that retrieves low-quality chunks.
+
+**5. No evaluation.** Without Precision@k, Recall, MRR, or Faithfulness metrics, you are flying blind. You cannot improve what you cannot measure. And manual spot-checking does not scale.
+
+These are not edge cases. A [2025 CDC policy RAG study](https://dev.to/kuldeep_paul/ten-failure-modes-of-rag-nobody-talks-about-and-how-to-detect-them-systematically-7i4) found that 80% of RAG failures trace back to chunking and retrieval decisions, not generation. [Research from Snorkel AI](https://snorkel.ai/blog/retrieval-augmented-generation-rag-failure-modes-and-how-to-fix-them/) and [Analytics Vidhya](https://www.analyticsvidhya.com/blog/2025/07/silent-killers-of-production-rag/) confirm the same pattern: most production RAG problems are retrieval problems in disguise.
+
+## Quick Wins: Zero-Cost, High-Impact Changes
+
+Before rebuilding the entire pipeline, we made six changes that cost nothing and took about two days:
+
+### Add Distance Thresholds
+
+The single highest-impact fix was one line of code. We added `"distances"` to the ChromaDB include parameter and filtered out anything above a cosine distance of 0.65:
+
+```python
+results = collection.query(
+    query_texts=[query],
+    n_results=top_k * 4,  # Over-fetch for filtering headroom
+    include=["documents", "metadatas", "distances"],
+)
+
+docs = results["documents"][0]
+metas = results["metadatas"][0]
+distances = results["distances"][0]
+
+# Filter by relevance threshold
+threshold = 0.65  # cosine distance: 0 = identical, 1 = opposite
+filtered = [
+    (doc, meta, dist)
+    for doc, meta, dist in zip(docs, metas, distances)
+    if dist <= threshold
+]
+
+# Never return zero results -- keep best match with a warning
+if not filtered and docs:
+    filtered = [(docs[0], metas[0], distances[0])]
+```
+
+This alone cut hallucinations by an estimated 15-20%. The system stopped injecting irrelevant context, so the LLM stopped inventing answers based on noise.
+
+### Contextual Chunk Headers
+
+Inspired by [Anthropic's Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) approach, we prepended source metadata to each chunk before embedding:
+
+```python
+for chunk_idx, chunk in enumerate(chunks):
+    title = doc.get("source_display", doc.get("title", ""))
+    source_type = doc.get("source_type", "document")
+    header = f"[Source: {title} | Type: {source_type}]"
+    contextualized = f"{header}\n\n{chunk}" if title else chunk
+    all_chunks.append(contextualized)
+```
+
+Anthropic's own research shows that [contextual embeddings reduce top-20 retrieval failure rates by 35%](https://www.anthropic.com/news/contextual-retrieval). Our simpler static-header approach is the budget version of their Haiku-powered contextual generation, but it still improved embedding quality measurably. For teams with budget, the full Anthropic approach -- using a cheap model like Haiku to generate rich contextual descriptions per chunk -- reduces retrieval failures by 49%, and by 67% when combined with reranking.
+
+### Optimize Chunk Size
+
+Our chunks were 800 characters (~150-200 tokens), but the embedding model (`all-mpnet-base-v2`) supports a 384-token window. We were using only 39% of the model's capacity. Increasing to 1200 characters for prose and 2000 for code blocks brought utilization to ~78%, reducing idea fragmentation across chunk boundaries.
+
+### Source Diversity Penalty
+
+We added a simple pseudo-MMR step to prevent five chunks from the same document from monopolizing the context window:
+
+```python
+source_count: dict[str, int] = {}
+diversified = []
+for doc, meta, score in ranked_chunks:
+    source = meta.get("source", "")
+    count = source_count.get(source, 0)
+    if count < 3:  # Max 3 chunks per source
+        diversified.append((doc, meta, score))
+        source_count[source] = count + 1
+    if len(diversified) >= top_k:
+        break
+```
+
+### XML Tags for Context Assembly
+
+We migrated from plain-text delimiters to XML tags for structuring context sent to the LLM:
+
+```python
+# Before: ambiguous delimiters
+context = f"--- Documents / RAG ---\n{rag_content}\n--- Web Search ---\n{web_content}"
+
+# After: structured XML tags
+context = f"<documents>\n{rag_content}\n</documents>\n\n<web_search>\n{web_content}\n</web_search>"
+```
+
+Claude (and most LLMs) parse XML tags with higher precision than plain-text separators. Anthropic [recommends this explicitly](https://www.anthropic.com/news/contextual-retrieval) for context formatting. Small change, measurable improvement in grounding.
+
+### Improved Hallucination Detection
+
+The original system flagged hallucinations with a binary check: `is_hallucination = len(sources) == 0`. This produced false positives for greetings ("hello") and general knowledge questions ("what is a REST API"). We added query classification:
+
+```python
+def classify_query(query: str) -> str:
+    if is_greeting(query):
+        return "greeting"
+    if matches_general_knowledge_pattern(query):
+        return "general_knowledge"
+    return "kb_specific"
+```
+
+Only KB-specific queries with insufficient context get flagged. This cut false positive hallucination rates significantly.
+
+**Combined impact of quick wins**: retrieval precision moved from ~58% to ~75%. Two days of work, zero infrastructure changes, zero cost.
+
+## The Multi-Stage Pipeline
+
+Quick wins got us to 75%. Getting to 91% required rebuilding the retrieval pipeline into a multi-stage architecture. Here is the full pipeline:
+
+```
+User Query
+    |
+    v
+[1] Query Transformation (optional)
+    |-- Anaphora resolution (if short/vague query)
+    |-- Query rewrite via LLM (if < 40 chars)
+    |
+    v
+[2] Hybrid Retrieval (parallel)
+    |-- ChromaDB Dense (cosine similarity + distance threshold)
+    |-- BM25 Sparse (keyword matching)
+    |
+    v
+[3] Reciprocal Rank Fusion
+    |
+    v
+[4] Cross-Encoder Reranking
+    |
+    v
+[5] Hybrid Scoring
+    |-- 60% cross-encoder relevance
+    |-- 20% user feedback
+    |-- 10% recency
+    |-- 10% source type boost
+    |
+    v
+[6] Source Diversity Filter
+    |
+    v
+[7] Context Assembly (XML tags)
+    |
+    v
+[8] LLM Generation (system prompt v2 with citations)
+    |
+    v
+Response + [N] Citations + Quality Metrics
+```
+
+Let me walk through each stage.
+
+### Stage 1: Hybrid Search -- BM25 + Dense Vectors
+
+The single biggest accuracy jump came from adding BM25 sparse retrieval alongside dense vector search. The reason is simple: dense embeddings and sparse keyword matching have complementary strengths. Dense search understands "deployment process" and "release workflow" are the same concept. BM25 understands that `ERR_CONN_REFUSED` is an exact string match, not a vague concept about network errors.
+
+[Industry benchmarks](https://medium.com/@pbronck/better-rag-accuracy-with-hybrid-bm25-dense-vector-search-ea99d48cba93) consistently show: BM25 alone achieves ~40% precision, dense vectors alone ~58%, but hybrid search hits ~79% before any reranking. [IBM research](https://ragaboutit.com/hybrid-retrieval-for-enterprise-rag-when-to-use-bm25-vectors-or-both/) confirms that three-way retrieval (BM25 + dense + sparse learned vectors) is optimal, but two-way (BM25 + dense) captures most of the gain.
+
+Implementation is lightweight. We used `rank_bm25`, a pure-Python BM25 library with zero infrastructure requirements:
+
+```python
+from rank_bm25 import BM25Okapi
+import re
+import threading
+
+_indices: dict[str, "BM25Okapi"] = {}
+_docs_cache: dict[str, list[tuple[str, dict]]] = {}
+_lock = threading.Lock()
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower())
+
+def build_index(tenant_id: str, documents: list[str], metadatas: list[dict]) -> None:
+    tokenized = [_tokenize(doc) for doc in documents]
+    with _lock:
+        _indices[tenant_id] = BM25Okapi(tokenized)
+        _docs_cache[tenant_id] = list(zip(documents, metadatas))
+
+def search(tenant_id: str, query: str, n_results: int = 20) -> list[tuple[str, dict, float]]:
+    with _lock:
+        index = _indices.get(tenant_id)
+        docs = _docs_cache.get(tenant_id)
+
+    if index is None or docs is None:
+        return []
+
+    scores = index.get_scores(_tokenize(query))
+    ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+    return [
+        (docs[idx][0], docs[idx][1], score)
+        for idx, score in ranked[:n_results]
+        if score > 0
+    ]
+```
+
+The index lives in memory, rebuilds lazily on first query after ingestion (<1s for 10K chunks), and costs ~5-20MB per tenant. No Elasticsearch, no external services. For our scale, this is the right trade-off.
+
+### Stage 2: Reciprocal Rank Fusion
+
+BM25 scores and cosine distances are on incompatible scales. You cannot just average them. Reciprocal Rank Fusion (RRF) solves this by using rank positions instead of raw scores:
+
+```python
+def reciprocal_rank_fusion(
+    rankings: list[list[tuple[str, dict, float]]],
+    k: int = 60,
+) -> list[tuple[str, dict, float]]:
+    doc_scores: dict[str, float] = {}
+    doc_data: dict[str, tuple[str, dict]] = {}
+
+    for ranking in rankings:
+        for rank, (doc, meta, _) in enumerate(ranking):
+            doc_key = doc[:200]  # Content-based dedup
+            rrf_score = 1.0 / (k + rank + 1)
+            doc_scores[doc_key] = doc_scores.get(doc_key, 0) + rrf_score
+            if doc_key not in doc_data:
+                doc_data[doc_key] = (doc, meta)
+
+    return [
+        (doc_data[key][0], doc_data[key][1], score)
+        for key, score in sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+    ]
+```
+
+RRF is 20 lines. It handles score incompatibility naturally and consistently outperforms learned fusion methods in practice. The `k=60` constant comes from the [original RRF paper](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) and works well as a default.
+
+### Stage 3: Cross-Encoder Reranking
+
+This is where the precision jump gets serious. A bi-encoder (what embedding models use) encodes query and document independently. A cross-encoder encodes them together, enabling deep token-level interaction between query and passage. The trade-off is speed -- cross-encoders cannot be used for initial retrieval across millions of documents -- but they are perfect for reranking 20-40 candidates.
+
+We use `cross-encoder/ms-marco-MiniLM-L-6-v2`, a 22M-parameter model that adds ~50-100ms of latency for 20 documents and uses ~100MB of RAM:
+
+```python
+from sentence_transformers import CrossEncoder
+
+_reranker: CrossEncoder | None = None
+
+def _get_reranker() -> CrossEncoder:
+    global _reranker
+    if _reranker is None:
+        _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    return _reranker
+
+def rerank(
+    query: str,
+    documents: list[str],
+    top_k: int = 5,
+) -> list[tuple[int, float]]:
+    if not documents:
+        return []
+
+    model = _get_reranker()
+    pairs = [[query, doc] for doc in documents]
+    scores = model.predict(pairs)
+
+    ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+    return ranked[:top_k]
+```
+
+[Research shows](https://app.ailog.fr/en/blog/news/reranking-cross-encoders-study) cross-encoder reranking improves accuracy by 33-40% for only ~120ms of additional latency. [Databricks studies](https://redis.io/blog/rag-at-scale/) report up to 48% improvement in retrieval quality. In our case, reranking was the difference between 79% (hybrid search alone) and 91% (hybrid + reranking + scoring).
+
+The model choice matters. `ms-marco-MiniLM-L-6-v2` is the standard for English corpora. For multilingual workloads, `BAAI/bge-reranker-v2-m3` is worth evaluating, but at 300MB it is heavier. [ZeroEntropy's 2026 guide](https://www.zeroentropy.dev/articles/ultimate-guide-to-choosing-the-best-reranking-model-in-2025) has a thorough comparison.
+
+### Stage 4: Hybrid Scoring
+
+After cross-encoder reranking, we blend multiple signals into a final score:
+
+```python
+def compute_hybrid_score(
+    ce_score: float,
+    feedback_score: float,
+    days_since_indexed: int,
+    source_type: str,
+) -> float:
+    recency = max(0, 1.0 - (days_since_indexed / 365))
+
+    source_boost = {
+        "documentation": 1.0,
+        "code": 0.9,
+        "slack": 0.7,
+        "web": 0.5,
+    }.get(source_type, 0.6)
+
+    return (
+        0.60 * ce_score
+        + 0.20 * feedback_score
+        + 0.10 * recency
+        + 0.10 * source_boost
+    )
+```
+
+The weights (60/20/10/10) are not magic numbers. They came from testing against our golden dataset. The cross-encoder gets the dominant weight because semantic relevance is what matters most. User feedback is a useful secondary signal -- if people have consistently found a chunk helpful, that is worth knowing. Recency matters because a deployment guide from last week is more relevant than one from last year. Source type is a soft prior: official documentation is more trustworthy than a Slack thread.
+
+## Measuring What Matters: RAG Evaluation
+
+Here is the uncomfortable truth: you can build this entire pipeline and still not know if it works. Without automated evaluation, you are back to vibes-based engineering.
+
+I have seen teams spend weeks tuning chunk sizes and reranking weights based on gut feeling, only to discover that their changes made things worse for 30% of query types. The human perception of RAG quality is unreliable -- we notice when answers are spectacularly wrong, but we miss the subtle degradations where the system returns a mostly-right answer that omits critical context. You need numbers, not intuition.
+
+### The Golden Dataset
+
+Step one is creating a golden dataset -- a curated set of question-answer-context triples where you know the correct answer and which chunks should be retrieved. We started with 50 pairs, manually curated by domain experts:
+
+```json
+{
+  "question": "How do I configure the staging deployment pipeline?",
+  "expected_answer": "The staging pipeline uses GitHub Actions with...",
+  "expected_chunks": ["deploy-guide-chunk-14", "ci-config-chunk-3"],
+  "metadata": {"difficulty": "medium", "domain": "devops"}
+}
+```
+
+Fifty pairs is enough to establish a baseline. We plan to grow it to 200+ over time, but starting small is better than not starting.
+
+### RAGAS + DeepEval
+
+For automated evaluation, we integrated both [RAGAS](https://docs.ragas.io/en/stable/) and [DeepEval](https://deepeval.com/docs/metrics-ragas). They measure overlapping but complementary things:
+
+- **Faithfulness**: Does the response only contain claims supported by the retrieved context?
+- **Answer Relevancy**: Does the response actually answer the question that was asked?
+- **Context Precision**: Are the retrieved chunks actually relevant to the question?
+- **Context Recall**: Did the retrieval step find all the chunks that contain the answer?
+
+RAGAS is the [de facto standard](https://www.getmaxim.ai/articles/the-5-best-rag-evaluation-tools-you-should-know-in-2026/) for RAG evaluation, originally a research framework from 2023 that gained broad adoption after being mentioned during OpenAI's Dev Day. DeepEval adds pytest-compatible test patterns and better explainability for debugging -- its metrics generate reasons that correspond to each score, making it easier to diagnose failures.
+
+We run evaluation offline as a Celery task on a weekly schedule, storing results in an `eval_results` table:
+
+```python
+from ragas.metrics import faithfulness, answer_relevancy, context_precision
+from ragas import evaluate
+
+def run_evaluation(golden_dataset: list[dict], pipeline) -> dict:
+    results = []
+    for item in golden_dataset:
+        context, sources, metrics = pipeline.retrieve(item["question"])
+        response = pipeline.generate(item["question"], context)
+        results.append({
+            "question": item["question"],
+            "answer": response,
+            "contexts": [context],
+            "ground_truth": item["expected_answer"],
+        })
+
+    dataset = Dataset.from_list(results)
+    scores = evaluate(dataset, metrics=[
+        faithfulness, answer_relevancy, context_precision
+    ])
+    return scores
+```
+
+The critical discipline is: **run evaluation before and after every pipeline change**. We caught two regressions early this way -- a chunk size change that improved precision for prose but degraded it for code, and a threshold adjustment that filtered too aggressively on short documents.
+
+For production monitoring beyond batch evaluation, LLM-as-Judge sampling is the next step. Instead of evaluating every response, you sample 5% of production queries and run a faithfulness check using a smaller model. At 200 queries/day, that is 10 evaluated responses daily -- enough to detect degradation trends without blowing up costs. We budget ~$15/month for this at medium volume. If faithfulness scores drop below a threshold, an alert fires to Slack. This catches issues like stale embeddings (when source documents change but vectors are not re-indexed) and prompt regressions.
+
+## The Cost Reality
+
+One of the arguments against multi-stage RAG is cost. Let me break down the actual numbers:
+
+| Component | Monthly Cost (200 queries/day) |
+|-----------|-------------------------------|
+| BM25 index (in-memory) | $0 |
+| Cross-encoder reranking (local CPU) | $0 |
+| Query transformation (Haiku, selective) | ~$0.60 |
+| Contextual Retrieval (Haiku, ingest-time) | ~$0.03/sync |
+| RAGAS evaluation (weekly batch) | ~$2 |
+| **Total** | **~$3/month** |
+
+The cross-encoder and BM25 run locally. They add ~100MB of RAM and ~110ms of latency. No API calls, no external services, no per-query billing. At 200 queries per day, the entire advanced pipeline costs less than a cup of coffee per month.
+
+The latency increase is real but manageable. Our P50 went from 3s to 4s, and P95 from 8s to 9s. For a knowledge assistant where accuracy matters more than milliseconds, this is an acceptable trade-off. Users notice wrong answers far more than they notice an extra second of wait time.
+
+## What I Would Do Differently
+
+If I were starting this project today, three things would change:
+
+**Start with evaluation, not improvements.** We built the golden dataset in month two. It should have been week one. Without a baseline, you cannot prove your changes help. You think you are improving things; you might be making them worse. [The METR study](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) on AI-assisted development showed a 39-percentage-point gap between perceived and actual performance. The same perception gap exists in RAG -- your pipeline feels good until you measure it.
+
+**Add distance threshold logging from day one.** Even before implementing threshold filtering, just logging the distances ChromaDB returns gives you immediate visibility into retrieval quality. If your average cosine distance is 0.8, your retrieval is mostly noise. You want this data from the first deployed query.
+
+**Do not use LangChain for the retrieval pipeline.** RRF is 20 lines. BM25 indexing is 40 lines. The cross-encoder reranker is 15 lines. LangChain's `EnsembleRetriever` would add 100+ transitive dependencies to achieve the same thing with less control. For the orchestration layer (agents, tool routing), frameworks have value. For the retrieval pipeline, direct implementation gives you better debuggability and fewer surprises.
+
+**Invest in content-type-aware chunking early.** A Slack thread, a Python function, and a Confluence page have fundamentally different structures. Fixed-size chunking treats them identically, which means you split functions mid-line and break prose mid-paragraph. We eventually implemented content-type detection that routes code to 2000-character chunks (preserving complete functions), prose to 1200-character chunks with 200-character overlap, and markdown to header-based semantic boundaries. This should have been in v1.
+
+## Takeaways
+
+1. **Measure first.** Build a golden dataset before optimizing anything. Even 30 curated question-answer pairs give you a baseline that prevents regression.
+
+2. **Hybrid search is the biggest single improvement.** BM25 + dense vectors with RRF consistently beats either method alone. The gain is ~21 percentage points in our case (58% to 79%), with zero infrastructure cost using `rank_bm25`.
+
+3. **Cross-encoder reranking is underused.** A 22M-parameter model adds 100ms and 100MB to get a 12-point precision boost. The ROI is hard to beat.
+
+4. **Distance thresholds are mandatory.** If your vector store always returns top_k results regardless of relevance, you are injecting noise into every prompt. One line of code fixes this.
+
+5. **Evaluation is not optional.** RAGAS + DeepEval give you Faithfulness, Precision, Recall, and Answer Relevancy for ~$2/month in batch mode. Run it weekly. Catch regressions before users do.
+
+6. **Quick wins compound.** Distance thresholds + chunk headers + diversity penalty + XML tags got us from 58% to 75% in two days with zero cost. Do these first.
+
+7. **The LLM is not the problem.** When your RAG answers are bad, the instinct is to switch to a bigger model. In most cases, the problem is what you are feeding the model, not the model itself. Fix retrieval first.
+
+The gap between a demo RAG pipeline and a production one is not exotic technology. It is distance thresholds, hybrid search, cross-encoder reranking, and disciplined evaluation. All of it is open source, all of it runs on commodity hardware, and the entire stack costs less than $10/month at moderate scale.
+
+[Hybrid search is now the production standard](https://redis.io/blog/rag-at-scale/) for enterprise RAG. [Cross-encoder reranking is mainstream](https://www.zeroentropy.dev/articles/ultimate-guide-to-choosing-the-best-reranking-model-in-2025). [Automated evaluation frameworks are mature](https://www.getmaxim.ai/articles/the-5-best-rag-evaluation-tools-you-should-know-in-2026/). The building blocks exist. What held me back was the assumption that the naive pipeline was good enough.
+
+Stop telling stakeholders "we have RAG." Start telling them your Precision@5 score.
