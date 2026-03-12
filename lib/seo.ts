@@ -15,7 +15,14 @@ export function generateBlogPostJsonLd(post: {
   description: string;
   date: string;
   slug: string;
+  lang?: string;
 }) {
+  const lang = post.lang || "en";
+  const postUrl =
+    lang === "es"
+      ? `${siteConfig.url}/es/blog/${post.slug}`
+      : `${siteConfig.url}/blog/${post.slug}`;
+
   return {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
@@ -23,6 +30,7 @@ export function generateBlogPostJsonLd(post: {
     description: post.description,
     datePublished: post.date,
     dateModified: post.date,
+    inLanguage: lang,
     author: {
       "@type": "Person",
       name: siteConfig.author.name,
@@ -32,10 +40,10 @@ export function generateBlogPostJsonLd(post: {
       "@type": "Person",
       name: siteConfig.author.name,
     },
-    url: `${siteConfig.url}/blog/${post.slug}`,
+    url: postUrl,
     mainEntityOfPage: {
       "@type": "WebPage",
-      "@id": `${siteConfig.url}/blog/${post.slug}`,
+      "@id": postUrl,
     },
   };
 }

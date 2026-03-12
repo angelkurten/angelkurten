@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { t, type Locale } from "@/lib/i18n";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
+  lang?: Locale;
 }
 
-export function SearchBar({ onSearch }: SearchBarProps) {
+export function SearchBar({ onSearch, lang = "en" }: SearchBarProps) {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export function SearchBar({ onSearch }: SearchBarProps) {
       </svg>
       <input
         type="text"
-        placeholder="Search posts..."
+        placeholder={t(lang, "blog.search")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         className="w-full rounded-lg border border-neutral-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none transition-colors focus:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:focus:border-neutral-600"

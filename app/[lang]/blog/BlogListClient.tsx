@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { PostCard } from "@/components/blog/PostCard";
 import { SearchBar } from "@/components/blog/SearchBar";
 import { Pagination } from "@/components/blog/Pagination";
+import { t, type Locale } from "@/lib/i18n";
 
 interface Post {
   title: string;
@@ -19,9 +20,10 @@ interface BlogListClientProps {
   allPosts: Post[];
   currentPage: number;
   totalPages: number;
+  lang?: Locale;
 }
 
-export function BlogListClient({ posts, allPosts, currentPage, totalPages }: BlogListClientProps) {
+export function BlogListClient({ posts, allPosts, currentPage, totalPages, lang = "en" }: BlogListClientProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
   const handleSearch = useCallback((query: string) => {
@@ -39,15 +41,15 @@ export function BlogListClient({ posts, allPosts, currentPage, totalPages }: Blo
 
   return (
     <div>
-      <SearchBar onSearch={handleSearch} />
+      <SearchBar onSearch={handleSearch} lang={lang} />
       <div className="mt-8 grid gap-6">
         {displayPosts.length > 0 ? (
-          displayPosts.map((post) => <PostCard key={post.slug} {...post} />)
+          displayPosts.map((post) => <PostCard key={post.slug} {...post} lang={lang} />)
         ) : (
-          <p className="text-center text-neutral-500 dark:text-neutral-400">No posts found.</p>
+          <p className="text-center text-neutral-500 dark:text-neutral-400">{t(lang, "blog.noPosts")}</p>
         )}
       </div>
-      {!searchQuery && <Pagination currentPage={currentPage} totalPages={totalPages} />}
+      {!searchQuery && <Pagination currentPage={currentPage} totalPages={totalPages} lang={lang} />}
     </div>
   );
 }

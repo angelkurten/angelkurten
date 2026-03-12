@@ -1,0 +1,138 @@
+---
+title: "Construyendo un Blog Moderno con Next.js y MDX"
+date: 2026-02-15
+description: "Una guia practica para crear un blog orientado a contenido y de alto rendimiento usando Next.js App Router y MDX para contenido rico e interactivo."
+tags: [nextjs, react, tutorial]
+published: true
+---
+
+Montar un blog puede sonar sencillo, pero elegir las herramientas correctas marca toda la diferencia entre un proyecto que escala y uno que se convierte en una carga de mantenimiento. En este post recorro el enfoque que use para construir este blog con Next.js y MDX.
+
+## Por que Next.js y MDX
+
+Next.js te da server-side rendering, generacion estatica y un sistema de rutas basado en archivos desde el primer momento. Combinado con MDX, obtienes la flexibilidad de Markdown con el poder de componentes React incrustados directamente en tu contenido.
+
+Las ventajas clave son:
+
+- **Generacion estatica** para cargas de pagina rapidas y excelente SEO
+- **Soporte MDX** para poder usar componentes React dentro de tus posts
+- **Contentlayer** para gestion de contenido con tipado seguro
+- **Optimizacion de imagenes integrada** con `next/image`
+
+### Como encaja Contentlayer
+
+Contentlayer transforma tus archivos MDX en datos JSON con tipado seguro que puedes importar directamente en tus componentes. En lugar de escribir parsers personalizados o lidiar con lecturas directas del sistema de archivos, defines un esquema y dejas que Contentlayer se encargue del resto.
+
+```typescript
+import { defineDocumentType, makeSource } from "contentlayer2/source-files";
+
+export const Post = defineDocumentType(() => ({
+  name: "Post",
+  filePathPattern: "posts/**/*.mdx",
+  contentType: "mdx",
+  fields: {
+    title: { type: "string", required: true },
+    date: { type: "date", required: true },
+    description: { type: "string", required: true },
+    tags: { type: "list", of: { type: "string" }, required: true },
+  },
+  computedFields: {
+    slug: {
+      type: "string",
+      resolve: (doc) => doc._raw.flattenedPath.replace("posts/", ""),
+    },
+  },
+}));
+```
+
+Esto te da autocompletado completo de TypeScript al consultar tus posts. No mas adivinar nombres de campos ni lidiar con tipos `any`.
+
+## Configurando el Proyecto
+
+### Instalar Dependencias
+
+Empieza con un proyecto fresco de Next.js y agrega la capa de contenido:
+
+```bash
+npx create-next-app@latest my-blog --typescript --tailwind --app
+cd my-blog
+npm install contentlayer2 next-contentlayer2
+npm install remark-gfm rehype-slug rehype-autolink-headings rehype-pretty-code
+```
+
+### Configurar Next.js
+
+Envuelve tu configuracion de Next.js con `withContentlayer` para que el pipeline de build sepa que debe procesar tus archivos MDX:
+
+```typescript
+import { withContentlayer } from "next-contentlayer2";
+
+const nextConfig = {
+  reactStrictMode: true,
+};
+
+export default withContentlayer(nextConfig);
+```
+
+### Crear Tu Primer Post
+
+Crea un directorio `content/posts/` y agrega un archivo MDX. El frontmatter se mapea directamente a los campos que definiste en tu configuracion de Contentlayer:
+
+```markdown
+---
+title: "Mi Primer Post"
+date: 2026-01-01
+description: "Comenzando con el blog."
+tags: [general]
+---
+
+Tu contenido va aqui. Puedes usar **negrita**, *cursiva* y `codigo en linea`.
+```
+
+## Renderizando Posts
+
+Obtener posts en un componente de pagina es directo con los tipos generados:
+
+```typescript
+import { allPosts } from "contentlayer/generated";
+import { compareDesc } from "date-fns";
+
+export default function BlogPage() {
+  const posts = allPosts
+    .filter((post) => post.published)
+    .sort((a, b) => compareDesc(new Date(a.date), new Date(b.date)));
+
+  return (
+    <main>
+      {posts.map((post) => (
+        <article key={post.slug}>
+          <h2>{post.title}</h2>
+          <p>{post.description}</p>
+          <span>{post.readingTime}</span>
+        </article>
+      ))}
+    </main>
+  );
+}
+```
+
+### Agregando Componentes Personalizados
+
+Una de las fortalezas de MDX es incrustar componentes React. Puedes crear un componente `Callout` para resaltar informacion importante:
+
+> **Nota:** Componentes MDX personalizados como callouts, playgrounds de codigo y demos interactivas se pueden registrar globalmente a traves de un proveedor de componentes MDX. Esto mantiene tus archivos de contenido limpios mientras soporta interactividad rica.
+
+## Consideraciones de Rendimiento
+
+Algunas cosas a tener en cuenta conforme tu blog crece:
+
+- **Generacion estatica** significa que tus paginas se pre-renderizan en tiempo de build. Esto es rapido pero requiere un rebuild cuando el contenido cambia.
+- **El calculo de tiempo de lectura** ocurre en tiempo de build a traves de campos computados de Contentlayer, asi que no hay overhead en tiempo de ejecucion.
+- Usa `next/image` para cualquier imagen en tus posts para obtener optimizacion automatica y lazy loading.
+- Manten tus componentes MDX ligeros. JavaScript pesado del lado del cliente anula el proposito de la generacion estatica.
+
+## Lo Que Viene Despues
+
+Con la base en su lugar, puedes extender el blog con funcionalidades como filtrado por tags, busqueda de texto completo, feeds RSS y una tabla de contenidos generada a partir de tus encabezados. Cada una de estas se construye sobre el mismo pipeline de Contentlayer, asi que agregar nuevos campos computados o tipos de documento es directo.
+
+El codigo fuente completo de este blog esta disponible en GitHub. Sientete libre de usarlo como punto de partida para tus propios proyectos.

@@ -1,0 +1,234 @@
+---
+title: "Patrones para Construir Sistemas Distribuidos Escalables"
+date: 2026-01-20
+description: "Patrones practicos y estrategias para disenar sistemas backend que manejen el crecimiento sin colapsar bajo su propio peso."
+tags: [architecture, backend, scalability]
+published: true
+---
+
+La mayoria de los sistemas no empiezan con problemas de escala. Empiezan con un monolito que funciona bien hasta que deja de hacerlo. El desafio es reconocer cuando introducir patrones distribuidos y cuales realmente resuelven tus cuellos de botella especificos en lugar de agregar complejidad innecesaria.
+
+## Empieza con el Monolito
+
+Hay un argumento fuerte para comenzar con un monolito bien estructurado. Un monolito te da:
+
+- Despliegue y depuracion mas simples
+- Menor overhead operacional
+- Iteracion mas rapida en etapas tempranas
+- Refactorizacion mas facil cuando los limites no estan claros
+
+La clave es construir el monolito con limites de modulos claros para que la extraccion en servicios sea posible despues.
+
+```typescript
+// A well-structured module boundary in a monolith
+// Each domain module exposes a clean interface
+export interface OrderService {
+  createOrder(input: CreateOrderInput): Promise<Order>;
+  getOrder(id: string): Promise<Order | null>;
+  cancelOrder(id: string): Promise<void>;
+}
+
+export interface InventoryService {
+  checkAvailability(productId: string, quantity: number): Promise<boolean>;
+  reserveStock(productId: string, quantity: number): Promise<Reservation>;
+  releaseReservation(reservationId: string): Promise<void>;
+}
+```
+
+Cuando cada modulo se comunica a traves de interfaces definidas, extraerlos en servicios separados despues se convierte en cuestion de reemplazar llamadas en proceso por llamadas de red.
+
+## Arquitectura Orientada a Eventos
+
+Una vez que superas el monolito, la arquitectura orientada a eventos es uno de los patrones mas efectivos para desacoplar servicios. En lugar de llamadas directas entre servicios, los servicios publican eventos que otros servicios consumen.
+
+### El Patron Event Bus
+
+```typescript
+interface DomainEvent {
+  type: string;
+  timestamp: Date;
+  aggregateId: string;
+  payload: Record<string, unknown>;
+}
+
+// Producer: Order service publishes an event
+async function completeOrder(orderId: string): Promise<void> {
+  const order = await orderRepository.findById(orderId);
+  order.markCompleted();
+  await orderRepository.save(order);
+
+  await eventBus.publish({
+    type: "order.completed",
+    timestamp: new Date(),
+    aggregateId: order.id,
+    payload: {
+      customerId: order.customerId,
+      items: order.items,
+      total: order.total,
+    },
+  });
+}
+
+// Consumer: Notification service reacts to the event
+eventBus.subscribe("order.completed", async (event: DomainEvent) => {
+  const { customerId, total } = event.payload;
+  await notificationService.sendOrderConfirmation(customerId, total);
+});
+```
+
+### Beneficios y Trade-offs
+
+Los eventos desacoplan tus servicios temporal y espacialmente. El servicio de ordenes no necesita saber sobre el servicio de notificaciones, y los eventos pueden procesarse de forma asincrona. Sin embargo, esto introduce consistencia eventual, lo que significa que necesitas manejar casos donde los datos estan temporalmente desincronizados.
+
+## El Patron CQRS
+
+Command Query Responsibility Segregation separa las operaciones de lectura y escritura en modelos diferentes. Esto es util cuando tus patrones de lectura difieren significativamente de tus patrones de escritura.
+
+### Cuando CQRS Tiene Sentido
+
+- Cargas de trabajo con muchas lecturas y consultas complejas
+- Diferentes requisitos de escalabilidad para lecturas vs escrituras
+- Multiples representaciones de lectura de los mismos datos
+- Sistemas con event sourcing donde el modelo de escritura es un log de eventos
+
+```typescript
+// Write side: optimized for consistency and business rules
+interface CommandHandler {
+  handle(command: PlaceOrderCommand): Promise<void>;
+}
+
+class PlaceOrderHandler implements CommandHandler {
+  async handle(command: PlaceOrderCommand): Promise<void> {
+    const order = Order.create(command);
+    await this.repository.save(order);
+    await this.eventStore.append(order.uncommittedEvents());
+  }
+}
+
+// Read side: optimized for query performance
+interface OrderReadModel {
+  id: string;
+  customerName: string;
+  itemCount: number;
+  total: number;
+  status: string;
+  createdAt: Date;
+}
+
+async function getOrderSummaries(
+  customerId: string
+): Promise<OrderReadModel[]> {
+  return db.query(
+    "SELECT * FROM order_summaries WHERE customer_id = $1 ORDER BY created_at DESC",
+    [customerId]
+  );
+}
+```
+
+El modelo de lectura es una proyeccion desnormalizada que se actualiza cada vez que se procesan eventos relevantes. Puede ser una base de datos completamente diferente, optimizada para tus patrones de consulta especificos.
+
+## Manejando Fallos Distribuidos
+
+En sistemas distribuidos, los fallos no son excepcionales. Son esperados. La pregunta es como los manejas.
+
+### Patron Circuit Breaker
+
+Un circuit breaker previene fallos en cascada deteniendo las llamadas a un servicio que esta fallando:
+
+```typescript
+class CircuitBreaker {
+  private failures = 0;
+  private lastFailure: Date | null = null;
+  private state: "closed" | "open" | "half-open" = "closed";
+
+  constructor(
+    private threshold: number = 5,
+    private resetTimeout: number = 30000
+  ) {}
+
+  async call<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.state === "open") {
+      if (Date.now() - this.lastFailure!.getTime() > this.resetTimeout) {
+        this.state = "half-open";
+      } else {
+        throw new Error("Circuit breaker is open");
+      }
+    }
+
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      this.onFailure();
+      throw error;
+    }
+  }
+
+  private onSuccess(): void {
+    this.failures = 0;
+    this.state = "closed";
+  }
+
+  private onFailure(): void {
+    this.failures++;
+    this.lastFailure = new Date();
+    if (this.failures >= this.threshold) {
+      this.state = "open";
+    }
+  }
+}
+```
+
+### Retry con Backoff Exponencial
+
+Para fallos transitorios, reintentar con delays incrementales previene problemas de thundering herd:
+
+```typescript
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("Unreachable");
+}
+```
+
+El jitter aleatorio previene que multiples clientes reintenten exactamente en los mismos intervalos, lo que simplemente desplazaria el pico de carga.
+
+## Estrategias de Escalamiento de Base de Datos
+
+### Read Replicas
+
+La estrategia de escalamiento mas simple es agregar read replicas. Dirige todas las escrituras al primario y distribuye las lecturas entre las replicas. Esto funciona bien cuando las lecturas superan significativamente a las escrituras, que es el caso de la mayoria de las aplicaciones.
+
+### Sharding
+
+Cuando una sola base de datos no puede manejar tu volumen de escritura, necesitas particionar los datos entre multiples bases de datos. La seleccion de la clave de sharding es critica:
+
+- **User ID** funciona bien para sistemas multi-tenant
+- **Region geografica** funciona para datos basados en ubicacion
+- **Basado en tiempo** funciona para cargas de trabajo con muchas inserciones como logs
+
+La desventaja es que las consultas cross-shard se vuelven costosas o imposibles, asi que elige tu clave de shard basandote en tus patrones de acceso mas comunes.
+
+## Consejos Practicos
+
+Despues de trabajar con sistemas distribuidos a diferentes escalas, algunas lecciones destacan:
+
+1. **Mide antes de optimizar.** Instrumenta tu sistema y deja que los datos te digan donde estan realmente los cuellos de botella.
+2. **Prefiere tecnologia aburrida.** PostgreSQL, Redis y una cola de mensajes resuelven la mayoria de los problemas. Bases de datos exoticas resuelven problemas exoticos que probablemente no tienes.
+3. **Disena para el fallo.** Toda llamada de red puede fallar. Todo servicio puede caerse. Construye tu sistema asumiendo que estos fallos van a ocurrir.
+4. **Manten servicios de grano grueso.** Microservicios demasiado pequenos crean mas problemas de los que resuelven. Si dos servicios siempre se despliegan juntos, deberian ser un solo servicio.
+5. **Invierte en observabilidad.** Distributed tracing, logging estructurado y dashboards de metricas no son opcionales a escala. No puedes arreglar lo que no puedes ver.
+
+El objetivo no es construir el sistema distribuido mas sofisticado. El objetivo es construir uno que sirva confiablemente a tus usuarios mientras se mantiene mantenible por tu equipo.

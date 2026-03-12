@@ -1,16 +1,20 @@
-import Link from "next/link";
+import { t, type Locale } from "@/lib/i18n";
 
-export function Footer() {
+interface FooterProps {
+  lang?: Locale;
+}
+
+export function Footer({ lang = "en" }: FooterProps) {
   return (
     <footer className="border-t border-neutral-200 dark:border-neutral-800">
       <div className="mx-auto flex max-w-3xl flex-col items-center gap-4 px-6 py-8 text-sm text-neutral-500 dark:text-neutral-400 sm:flex-row sm:justify-between">
-        <p>&copy; 2026 Angel Kurten. All rights reserved.</p>
+        <p>&copy; 2026 Angel Kurten. {t(lang, "footer.rights")}.</p>
         <div className="flex items-center gap-4">
           <a
             href="mailto:angelkurten@gmail.com"
             className="transition-colors hover:text-neutral-900 dark:hover:text-neutral-100"
           >
-            Email
+            {t(lang, "footer.email")}
           </a>
           <a
             href="https://linkedin.com/in/angelkurten"
@@ -18,7 +22,7 @@ export function Footer() {
             rel="noopener noreferrer"
             className="transition-colors hover:text-neutral-900 dark:hover:text-neutral-100"
           >
-            LinkedIn
+            {t(lang, "footer.linkedin")}
           </a>
         </div>
       </div>

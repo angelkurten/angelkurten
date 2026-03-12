@@ -19,9 +19,24 @@ export const Post = defineDocumentType(() => ({
     canonicalUrl: { type: "string" },
   },
   computedFields: {
+    lang: {
+      type: "string",
+      resolve: (doc) =>
+        doc._raw.sourceFileName.endsWith(".es.mdx") ? "es" : "en",
+    },
     slug: {
       type: "string",
-      resolve: (doc) => doc._raw.flattenedPath.replace("posts/", ""),
+      resolve: (doc) => {
+        const raw = doc._raw.flattenedPath.replace("posts/", "");
+        return raw.replace(/\.es$/, "");
+      },
+    },
+    translationSlug: {
+      type: "string",
+      resolve: (doc) => {
+        const raw = doc._raw.flattenedPath.replace("posts/", "");
+        return raw.replace(/\.es$/, "");
+      },
     },
     readingTime: {
       type: "string",
@@ -29,20 +44,30 @@ export const Post = defineDocumentType(() => ({
     },
     structuredData: {
       type: "json",
-      resolve: (doc) => ({
-        "@context": "https://schema.org",
-        "@type": "BlogPosting",
-        headline: doc.title,
-        datePublished: doc.date,
-        dateModified: doc.date,
-        description: doc.description,
-        author: {
-          "@type": "Person",
-          name: "Angel Kurten",
-          url: "https://angelkurten.com",
-        },
-        url: `https://angelkurten.com/blog/${doc._raw.flattenedPath.replace("posts/", "")}`,
-      }),
+      resolve: (doc) => {
+        const isSpanish = doc._raw.sourceFileName.endsWith(".es.mdx");
+        const slug = doc._raw.flattenedPath
+          .replace("posts/", "")
+          .replace(/\.es$/, "");
+        const url = isSpanish
+          ? `https://angelkurten.com/es/blog/${slug}`
+          : `https://angelkurten.com/blog/${slug}`;
+        return {
+          "@context": "https://schema.org",
+          "@type": "BlogPosting",
+          headline: doc.title,
+          datePublished: doc.date,
+          dateModified: doc.date,
+          description: doc.description,
+          inLanguage: isSpanish ? "es" : "en",
+          author: {
+            "@type": "Person",
+            name: "Angel Kurten",
+            url: "https://angelkurten.com",
+          },
+          url,
+        };
+      },
     },
   },
 }));

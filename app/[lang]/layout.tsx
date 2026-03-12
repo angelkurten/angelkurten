@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { DM_Serif_Display, Inter } from "next/font/google";
 import { Providers } from "./providers";
-import "./globals.css";
+import "../globals.css";
+import { locales, type Locale } from "@/lib/i18n";
 
 const dmSerif = DM_Serif_Display({
   subsets: ["latin"],
@@ -48,20 +49,32 @@ export const metadata: Metadata = {
   },
   alternates: {
     canonical: "https://angelkurten.com",
+    languages: {
+      en: "https://angelkurten.com",
+      es: "https://angelkurten.com/es",
+    },
     types: {
       "application/rss+xml": "/feed.xml",
     },
   },
 };
 
-export default function RootLayout({
+export function generateStaticParams() {
+  return locales.map((lang) => ({ lang }));
+}
+
+export default async function LangLayout({
   children,
+  params,
 }: {
   children: React.ReactNode;
+  params: Promise<{ lang: string }>;
 }) {
+  const { lang } = await params;
+
   return (
     <html
-      lang="en"
+      lang={lang}
       className={`${dmSerif.variable} ${inter.variable}`}
       suppressHydrationWarning
     >

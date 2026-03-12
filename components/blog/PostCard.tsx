@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
+import { getLocalizedPath, type Locale } from "@/lib/i18n";
 import { TagBadge } from "./TagBadge";
 
 interface PostCardProps {
@@ -9,25 +10,28 @@ interface PostCardProps {
   description: string;
   tags: string[];
   readingTime: string;
+  lang?: Locale;
 }
 
-export function PostCard({ title, slug, date, description, tags, readingTime }: PostCardProps) {
+export function PostCard({ title, slug, date, description, tags, readingTime, lang = "en" }: PostCardProps) {
+  const dateLocale = lang === "es" ? "es-ES" : "en-US";
+
   return (
     <article className="group rounded-lg border border-neutral-200 p-6 transition-colors hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-700">
       <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
-        <time dateTime={date}>{formatDate(date)}</time>
+        <time dateTime={date}>{formatDate(date, dateLocale)}</time>
         <span>·</span>
         <span>{readingTime}</span>
       </div>
       <h2 className="mt-2 text-xl font-semibold">
-        <Link href={`/blog/${slug}`} className="hover:underline">
+        <Link href={getLocalizedPath(`/blog/${slug}`, lang)} className="hover:underline">
           {title}
         </Link>
       </h2>
       <p className="mt-2 text-neutral-600 dark:text-neutral-400 line-clamp-2">{description}</p>
       <div className="mt-4 flex flex-wrap gap-2">
         {tags.map((tag) => (
-          <TagBadge key={tag} tag={tag} />
+          <TagBadge key={tag} tag={tag} lang={lang} />
         ))}
       </div>
     </article>

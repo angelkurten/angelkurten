@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { t, type Locale } from "@/lib/i18n";
 import type { TocItem } from "@/lib/toc";
 
 interface TableOfContentsProps {
   items: TocItem[];
+  lang?: Locale;
 }
 
-export function TableOfContents({ items }: TableOfContentsProps) {
+export function TableOfContents({ items, lang = "en" }: TableOfContentsProps) {
   const [activeId, setActiveId] = useState<string>("");
 
   useEffect(() => {
@@ -36,7 +38,7 @@ export function TableOfContents({ items }: TableOfContentsProps) {
   return (
     <nav className="hidden w-64 shrink-0 lg:block" aria-label="Table of contents">
       <div className="sticky top-24">
-        <p className="mb-4 text-sm font-medium">On this page</p>
+        <p className="mb-4 text-sm font-medium">{t(lang, "toc.title")}</p>
         <ul className="space-y-2 text-sm">
           {items.map((item) => (
             <li key={item.slug}>

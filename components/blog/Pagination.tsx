@@ -1,15 +1,18 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { t, getLocalizedPath, type Locale } from "@/lib/i18n";
 
 interface PaginationProps {
   currentPage: number;
   totalPages: number;
+  lang?: Locale;
 }
 
-export function Pagination({ currentPage, totalPages }: PaginationProps) {
+export function Pagination({ currentPage, totalPages, lang = "en" }: PaginationProps) {
   if (totalPages <= 1) return null;
 
-  const getPageUrl = (page: number) => (page === 1 ? "/blog" : `/blog/page/${page}`);
+  const getPageUrl = (page: number) =>
+    getLocalizedPath(page === 1 ? "/blog" : `/blog/page/${page}`, lang);
 
   return (
     <nav className="mt-8 flex items-center justify-center gap-2" aria-label="Pagination">
@@ -18,7 +21,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
           href={getPageUrl(currentPage - 1)}
           className="rounded-md px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
         >
-          Previous
+          {t(lang, "pagination.previous")}
         </Link>
       )}
       {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
@@ -40,7 +43,7 @@ export function Pagination({ currentPage, totalPages }: PaginationProps) {
           href={getPageUrl(currentPage + 1)}
           className="rounded-md px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
         >
-          Next
+          {t(lang, "pagination.next")}
         </Link>
       )}
     </nav>

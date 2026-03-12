@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import Script from "next/script";
+import { getLocalizedPath, type Locale } from "@/lib/i18n";
 
-type Lang = "en" | "es";
-
-const i18n: Record<Lang, Record<string, string>> = {
+const i18n: Record<Locale, Record<string, string>> = {
   en: {
     "hero.tagline":
       "Engineering Leader. Product Developer.<br>I build things that work.",
@@ -111,12 +111,13 @@ const jsonLd = {
   },
 };
 
-function t(lang: Lang, key: string): string {
+function t(lang: Locale, key: string): string {
   return i18n[lang][key] ?? key;
 }
 
 export default function HomePage() {
-  const [lang, setLang] = useState<Lang>("en");
+  const params = useParams();
+  const lang = (params.lang as Locale) || "en";
   const revealRefs = useRef<(HTMLElement | null)[]>([]);
 
   const addRevealRef = useCallback((el: HTMLElement | null) => {
@@ -124,10 +125,6 @@ export default function HomePage() {
       revealRefs.current.push(el);
     }
   }, []);
-
-  useEffect(() => {
-    document.documentElement.lang = lang;
-  }, [lang]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -149,6 +146,9 @@ export default function HomePage() {
     return () => observer.disconnect();
   }, []);
 
+  const otherLang: Locale = lang === "en" ? "es" : "en";
+  const langSwitchHref = getLocalizedPath("/", otherLang);
+
   return (
     <div className="portfolio-page">
       <Script
@@ -159,28 +159,19 @@ export default function HomePage() {
 
       {/* Navigation */}
       <nav className="portfolio-nav" aria-label="Main navigation">
-        <Link href="/blog">Blog</Link>
-        <Link href="/tags">Tags</Link>
-        <Link href="/about">About</Link>
+        <Link href={getLocalizedPath("/blog", lang)}>Blog</Link>
+        <Link href={getLocalizedPath("/tags", lang)}>Tags</Link>
+        <Link href={getLocalizedPath("/about", lang)}>About</Link>
       </nav>
 
       {/* Language Switcher */}
       <nav className="lang-switch" aria-label="Language">
-        <button
-          className={lang === "en" ? "active" : ""}
-          onClick={() => setLang("en")}
-          aria-pressed={lang === "en"}
+        <Link
+          href={langSwitchHref}
+          className="lang-switch-link"
         >
-          EN
-        </button>
-        <span className="lang-divider">/</span>
-        <button
-          className={lang === "es" ? "active" : ""}
-          onClick={() => setLang("es")}
-          aria-pressed={lang === "es"}
-        >
-          ES
-        </button>
+          {otherLang.toUpperCase()}
+        </Link>
       </nav>
 
       {/* Hero */}
