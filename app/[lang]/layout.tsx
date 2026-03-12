@@ -3,6 +3,7 @@ import { DM_Serif_Display, Inter } from "next/font/google";
 import { Providers } from "./providers";
 import "../globals.css";
 import { locales, type Locale } from "@/lib/i18n";
+import { GoogleTagManagerHead, GoogleTagManagerBody } from "@/components/GoogleTagManager";
 
 const dmSerif = DM_Serif_Display({
   subsets: ["latin"],
@@ -78,7 +79,11 @@ export default async function LangLayout({
       className={`${dmSerif.variable} ${inter.variable}`}
       suppressHydrationWarning
     >
+      <head>
+        <GoogleTagManagerHead />
+      </head>
       <body className="font-sans antialiased">
+        <GoogleTagManagerBody />
         <Providers>{children}</Providers>
       </body>
     </html>
