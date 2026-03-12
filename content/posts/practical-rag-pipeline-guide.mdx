@@ -385,6 +385,22 @@ The cross-encoder and BM25 run locally. They add ~100MB of RAM and ~110ms of lat
 
 The latency increase is real but manageable. Our P50 went from 3s to 4s, and P95 from 8s to 9s. For a knowledge assistant where accuracy matters more than milliseconds, this is an acceptable trade-off. Users notice wrong answers far more than they notice an extra second of wait time.
 
+## Real-World Impact: ContextIA Confidence Scores
+
+Numbers in a golden dataset are one thing. What matters is whether users notice the difference. In ContextIA, every PRD analysis produces a confidence score -- a measure of how well the system can verify its claims against the source documents. This is a direct downstream metric of retrieval quality: if the pipeline retrieves irrelevant chunks, the system cannot verify claims, and confidence drops.
+
+Here is the before and after:
+
+![ContextIA before pipeline improvements -- 30% confidence with 155 assumed claims](/images/blog/contextia-before.png)
+
+![ContextIA after pipeline improvements -- 84% confidence with 53 confirmed, 10 inferred, and 89 decision claims](/images/blog/contextia-after.png)
+
+The first screenshot shows a PRD analysis running on the naive pipeline: 30% confidence, with 155 claims classified as "assumed" -- meaning the system could not find supporting evidence in the knowledge base. The retrieval was returning noise, so the verification layer had nothing solid to work with.
+
+The second screenshot shows the same type of analysis after the multi-stage pipeline: 84% confidence, with 53 confirmed claims, 10 inferred, 89 decisions tracked, and only 24 assumed. The retrieval improvements did not just move a metric in a spreadsheet -- they changed the product from "mostly guessing" to "mostly verified."
+
+This is the compounding effect of the entire pipeline. Distance thresholds stop irrelevant context from polluting the prompt. Hybrid search finds both semantic matches and exact references. Cross-encoder reranking puts the most relevant chunks first. The LLM generates better answers because it receives better context. And the confidence layer can verify those answers because the retrieved sources actually contain the evidence.
+
 ## What I Would Do Differently
 
 If I were starting this project today, three things would change:

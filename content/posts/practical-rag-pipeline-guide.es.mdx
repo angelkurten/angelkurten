@@ -385,6 +385,22 @@ El cross-encoder y BM25 corren localmente. Agregan ~100MB de RAM y ~110ms de lat
 
 El aumento de latencia es real pero manejable. Nuestro P50 paso de 3s a 4s, y el P95 de 8s a 9s. Para un asistente de conocimiento donde la precision importa mas que los milisegundos, este es un trade-off aceptable. Los usuarios notan las respuestas incorrectas mucho mas de lo que notan un segundo extra de espera.
 
+## Impacto Real: Scores de Confianza en ContextIA
+
+Los numeros en un golden dataset son una cosa. Lo que importa es si los usuarios notan la diferencia. En ContextIA, cada analisis de PRD produce un score de confianza -- una medida de que tan bien el sistema puede verificar sus afirmaciones contra los documentos fuente. Esta es una metrica downstream directa de la calidad de retrieval: si el pipeline recupera chunks irrelevantes, el sistema no puede verificar las afirmaciones, y la confianza cae.
+
+Aqui esta el antes y el despues:
+
+![ContextIA antes de las mejoras del pipeline -- 30% de confianza con 155 afirmaciones asumidas](/images/blog/contextia-before.png)
+
+![ContextIA despues de las mejoras del pipeline -- 84% de confianza con 53 confirmadas, 10 inferidas y 89 decisiones](/images/blog/contextia-after.png)
+
+La primera captura muestra un analisis de PRD corriendo en el pipeline ingenuo: 30% de confianza, con 155 afirmaciones clasificadas como "asumidas" -- es decir, el sistema no pudo encontrar evidencia de soporte en la base de conocimiento. El retrieval estaba devolviendo ruido, asi que la capa de verificacion no tenia nada solido con que trabajar.
+
+La segunda captura muestra el mismo tipo de analisis despues del pipeline multi-etapa: 84% de confianza, con 53 afirmaciones confirmadas, 10 inferidas, 89 decisiones rastreadas, y solo 24 asumidas. Las mejoras de retrieval no solo movieron una metrica en una hoja de calculo -- cambiaron el producto de "mayormente adivinando" a "mayormente verificado."
+
+Este es el efecto compuesto de todo el pipeline. Los umbrales de distancia evitan que contexto irrelevante contamine el prompt. La busqueda hibrida encuentra tanto coincidencias semanticas como referencias exactas. El reranking con cross-encoder pone los chunks mas relevantes primero. El LLM genera mejores respuestas porque recibe mejor contexto. Y la capa de confianza puede verificar esas respuestas porque las fuentes recuperadas realmente contienen la evidencia.
+
 ## Lo Que Haria Diferente
 
 Si estuviera empezando este proyecto hoy, tres cosas cambiarian:
