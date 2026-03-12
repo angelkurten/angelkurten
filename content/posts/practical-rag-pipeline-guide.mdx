@@ -227,7 +227,7 @@ def search(tenant_id: str, query: str, n_results: int = 20) -> list[tuple[str, d
     ]
 ```
 
-The index lives in memory, rebuilds lazily on first query after ingestion (<1s for 10K chunks), and costs ~5-20MB per tenant. No Elasticsearch, no external services. For our scale, this is the right trade-off.
+The index lives in memory, rebuilds lazily on first query after ingestion (under 1s for 10K chunks), and costs ~5-20MB per tenant. No Elasticsearch, no external services. For our scale, this is the right trade-off.
 
 ### Stage 2: Reciprocal Rank Fusion
 
