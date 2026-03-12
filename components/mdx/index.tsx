@@ -1,11 +1,13 @@
 import type { MDXComponents } from "mdx/types";
 import Link from "next/link";
 import { Callout } from "./Callout";
+import { Mermaid } from "./Mermaid";
 import { ResponsiveImage } from "./ResponsiveImage";
 import { YouTube } from "./YouTube";
 
 export const mdxComponents: MDXComponents = {
   Callout,
+  Mermaid,
   YouTube,
   img: ({ src, alt, ...props }) => (
     <ResponsiveImage src={src || ""} alt={alt || ""} {...props} />

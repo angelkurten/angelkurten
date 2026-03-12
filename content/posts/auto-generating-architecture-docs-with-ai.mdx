@@ -50,7 +50,7 @@ This sounds reasonable. It works terribly.
 
 A chunk like `def validate_token(token: str) -> bool` tells the LLM almost nothing. Where is this function called? What tokens does it validate? Is this part of the authentication flow or the API key system? Is it even used anymore? The raw code chunk is decontextualized noise. In [research on RAG for large-scale code repositories](https://www.qodo.ai/blog/rag-for-large-scale-code-repos/), one of the core findings is that naive chunking methods struggle with accurately delineating meaningful segments of code, and providing incomplete code segments to an LLM increases hallucinations.
 
-This is measurable. In the RAG system I was building, raw code chunks indexed with `source_type="git"` received a retrieval boost of 0.7—the lowest after Slack messages (0.4)—precisely because they produced low-quality context for the questions that mattered most. When I asked "how does our payment system work?", I got back individual function signatures and config snippets instead of a coherent explanation.
+This is measurable. In ContextIA -- the RAG system I was building -- raw code chunks indexed with `source_type="git"` received a retrieval boost of 0.7—the lowest after Slack messages (0.4)—precisely because they produced low-quality context for the questions that mattered most. When I asked "how does our payment system work?", I got back individual function signatures and config snippets instead of a coherent explanation.
 
 The problem is not retrieval accuracy. The problem is that code chunks, even when accurately retrieved, do not contain the semantic information that answers architecture questions.
 

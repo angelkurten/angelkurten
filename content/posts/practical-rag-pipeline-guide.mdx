@@ -8,7 +8,7 @@ published: true
 
 "We have RAG" is the new "we have tests." It tells you nothing about quality.
 
-I have spent the last few months rebuilding a production RAG pipeline for a team knowledge assistant. The starting point was a textbook implementation: user query goes into an embedding model, cosine similarity pulls the top-k chunks from ChromaDB, those chunks get stuffed into a prompt, and the LLM generates an answer. It worked. Sort of. Users got responses. Those responses were confidently wrong about 20% of the time, and the system had no idea which answers were good and which were hallucinated noise.
+I have spent the last couple of weeks rebuilding a production RAG pipeline for ContextIA, a team knowledge assistant. The starting point was a textbook implementation: user query goes into an embedding model, cosine similarity pulls the top-k chunks from ChromaDB, those chunks get stuffed into a prompt, and the LLM generates an answer. It worked. Sort of. Users got responses. Those responses were confidently wrong about 20% of the time, and the system had no idea which answers were good and which were hallucinated noise.
 
 When we finally measured retrieval precision properly, the number was 58%. That means nearly half the context fed to the language model was irrelevant. The LLM was doing its best to synthesize garbage into coherent-sounding answers, and it was disturbingly good at it.
 
@@ -143,43 +143,26 @@ Only KB-specific queries with insufficient context get flagged. This cut false p
 
 Quick wins got us to 75%. Getting to 91% required rebuilding the retrieval pipeline into a multi-stage architecture. Here is the full pipeline:
 
-```
-User Query
-    |
-    v
-[1] Query Transformation (optional)
-    |-- Anaphora resolution (if short/vague query)
-    |-- Query rewrite via LLM (if < 40 chars)
-    |
-    v
-[2] Hybrid Retrieval (parallel)
-    |-- ChromaDB Dense (cosine similarity + distance threshold)
-    |-- BM25 Sparse (keyword matching)
-    |
-    v
-[3] Reciprocal Rank Fusion
-    |
-    v
-[4] Cross-Encoder Reranking
-    |
-    v
-[5] Hybrid Scoring
-    |-- 60% cross-encoder relevance
-    |-- 20% user feedback
-    |-- 10% recency
-    |-- 10% source type boost
-    |
-    v
-[6] Source Diversity Filter
-    |
-    v
-[7] Context Assembly (XML tags)
-    |
-    v
-[8] LLM Generation (system prompt v2 with citations)
-    |
-    v
-Response + [N] Citations + Quality Metrics
+```mermaid
+graph TD
+    A["User Query"] --> B["1. Query Transformation (optional)"]
+    B --> B1["Anaphora resolution (if short/vague query)"]
+    B --> B2["Query rewrite via LLM (if < 40 chars)"]
+    B --> C["2. Hybrid Retrieval (parallel)"]
+    C --> C1["ChromaDB Dense (cosine similarity + distance threshold)"]
+    C --> C2["BM25 Sparse (keyword matching)"]
+    C1 --> D["3. Reciprocal Rank Fusion"]
+    C2 --> D
+    D --> E["4. Cross-Encoder Reranking"]
+    E --> F["5. Hybrid Scoring"]
+    F --> F1["60% cross-encoder relevance"]
+    F --> F2["20% user feedback"]
+    F --> F3["10% recency"]
+    F --> F4["10% source type boost"]
+    F --> G["6. Source Diversity Filter"]
+    G --> H["7. Context Assembly (XML tags)"]
+    H --> I["8. LLM Generation (system prompt v2 with citations)"]
+    I --> J["Response + Citations + Quality Metrics"]
 ```
 
 Let me walk through each stage.
@@ -406,7 +389,7 @@ The latency increase is real but manageable. Our P50 went from 3s to 4s, and P95
 
 If I were starting this project today, three things would change:
 
-**Start with evaluation, not improvements.** We built the golden dataset in month two. It should have been week one. Without a baseline, you cannot prove your changes help. You think you are improving things; you might be making them worse. [The METR study](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) on AI-assisted development showed a 39-percentage-point gap between perceived and actual performance. The same perception gap exists in RAG -- your pipeline feels good until you measure it.
+**Start with evaluation, not improvements.** We built the golden dataset in week two. It should have been week one. Without a baseline, you cannot prove your changes help. You think you are improving things; you might be making them worse. [The METR study](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) on AI-assisted development showed a 39-percentage-point gap between perceived and actual performance. The same perception gap exists in RAG -- your pipeline feels good until you measure it.
 
 **Add distance threshold logging from day one.** Even before implementing threshold filtering, just logging the distances ChromaDB returns gives you immediate visibility into retrieval quality. If your average cosine distance is 0.8, your retrieval is mostly noise. You want this data from the first deployed query.
 

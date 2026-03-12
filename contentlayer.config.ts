@@ -4,6 +4,7 @@ import rehypeSlug from "rehype-slug";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import remarkGfm from "remark-gfm";
 import readingTime from "reading-time";
+import { rehypeMermaid } from "./lib/rehype-mermaid";
 
 export const Post = defineDocumentType(() => ({
   name: "Post",
@@ -87,6 +88,7 @@ export default makeSource({
     rehypePlugins: [
       rehypeSlug,
       [rehypeAutolinkHeadings, { behavior: "wrap" }],
+      rehypeMermaid,
       [rehypePrettyCode, rehypePrettyCodeOptions],
     ],
   },
