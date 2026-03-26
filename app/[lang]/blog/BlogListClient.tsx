@@ -20,10 +20,11 @@ interface BlogListClientProps {
   allPosts: Post[];
   currentPage: number;
   totalPages: number;
+  totalCount: number;
   lang?: Locale;
 }
 
-export function BlogListClient({ posts, allPosts, currentPage, totalPages, lang = "en" }: BlogListClientProps) {
+export function BlogListClient({ posts, allPosts, currentPage, totalPages, totalCount, lang = "en" }: BlogListClientProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
   const handleSearch = useCallback((query: string) => {
@@ -42,13 +43,30 @@ export function BlogListClient({ posts, allPosts, currentPage, totalPages, lang 
   return (
     <div>
       <SearchBar onSearch={handleSearch} lang={lang} />
-      <div className="mt-8 grid gap-6">
-        {displayPosts.length > 0 ? (
-          displayPosts.map((post) => <PostCard key={post.slug} {...post} lang={lang} />)
-        ) : (
-          <p className="text-center text-neutral-500 dark:text-neutral-400">{t(lang, "blog.noPosts")}</p>
-        )}
+
+      <div className="mt-10 border-t border-neutral-200 dark:border-neutral-800 pt-10">
+        <div className="flex flex-col">
+          {displayPosts.length > 0 ? (
+            displayPosts.map((post, index) => {
+              const chapterNumber = searchQuery
+                ? totalCount - allPosts.indexOf(post)
+                : totalCount - ((currentPage - 1) * posts.length + index);
+
+              return (
+                <div key={post.slug} className="relative">
+                  <PostCard {...post} lang={lang} chapterNumber={chapterNumber} />
+                  {index < displayPosts.length - 1 && (
+                    <div className="ml-[1.1rem] sm:ml-[1.35rem] mb-10 border-l border-dashed border-neutral-200 dark:border-neutral-800 h-0" />
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <p className="text-center text-neutral-500 dark:text-neutral-400 py-12">{t(lang, "blog.noPosts")}</p>
+          )}
+        </div>
       </div>
+
       {!searchQuery && <Pagination currentPage={currentPage} totalPages={totalPages} lang={lang} />}
     </div>
   );

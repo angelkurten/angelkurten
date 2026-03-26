@@ -63,6 +63,7 @@ export default async function BlogPage({ params }: PageProps) {
             allPosts={serializedAllPosts}
             currentPage={currentPage}
             totalPages={totalPages}
+            totalCount={allPosts.length}
             lang={locale}
           />
         </div>
