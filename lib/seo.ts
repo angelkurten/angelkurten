@@ -1,7 +1,7 @@
 export const siteConfig = {
   title: "Angel Kurten",
   description:
-    "Engineering Leader driving AI-first transformations and scalable distributed systems.",
+    "Engineering Leader building scalable distributed systems and AI-driven products. Practical insights on backend architecture, RAG pipelines, and engineering at scale.",
   url: "https://angelkurten.com",
   author: {
     name: "Angel Kurten",

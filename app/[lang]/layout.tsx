@@ -23,37 +23,25 @@ const inter = Inter({
 export const metadata: Metadata = {
   metadataBase: new URL("https://angelkurten.com"),
   title: {
-    default: "Angel Kurten — Engineering Leader & Product Developer",
+    default: "Angel Kurten — Scalable Distributed Systems & AI Engineering",
     template: "%s | Angel Kurten",
   },
   description:
-    "Engineering Leader driving AI-first transformations and scalable distributed systems. Building end-to-end products across high-growth SaaS platforms.",
+    "Engineering Leader building scalable distributed systems and AI-driven products. Practical insights on backend architecture, RAG pipelines, and engineering at scale.",
   authors: [{ name: "Angel Kurten" }],
   openGraph: {
-    title: "Angel Kurten — Engineering Leader & Product Developer",
-    description:
-      "Engineering Leader driving AI-first transformations and scalable distributed systems.",
-    url: "https://angelkurten.com",
     siteName: "Angel Kurten",
     locale: "en_US",
     type: "website",
   },
   twitter: {
-    card: "summary",
-    title: "Angel Kurten — Engineering Leader & Product Developer",
-    description:
-      "Engineering Leader driving AI-first transformations and scalable distributed systems.",
+    card: "summary_large_image",
   },
   robots: {
     index: true,
     follow: true,
   },
   alternates: {
-    canonical: "https://angelkurten.com",
-    languages: {
-      en: "https://angelkurten.com",
-      es: "https://angelkurten.com/es",
-    },
     types: {
       "application/rss+xml": "/feed.xml",
     },
