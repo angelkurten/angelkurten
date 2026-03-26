@@ -1,0 +1,474 @@
+---
+title: "Building Your First MCP Server: A Backend Engineer's Production Guide"
+date: 2026-03-25
+description: "MCP is the protocol connecting AI agents to the real world, but most tutorials stop at hello world. Here is how to build MCP servers that survive production — with auth, error handling, observability, and the patterns I wish existed when I started."
+tags: [ai, backend, architecture, developer-tools, python]
+published: true
+---
+
+Every tutorial on MCP servers ends at the same place: a decorated Python function that adds two numbers. Congratulations, your AI agent can do arithmetic. Now deploy that to production where real users send malformed inputs, your downstream APIs go down at 3 AM, and someone eventually tries to prompt-inject their way into your database.
+
+The Model Context Protocol has become the standard way AI agents interact with the outside world. Anthropic released it in November 2024. By March 2025, OpenAI adopted it. Google DeepMind followed in April. Microsoft integrated it across Azure and Microsoft 365. The [official registry](https://registry.modelcontextprotocol.io/) now lists thousands of servers, and the [Pragmatic Engineer's survey](https://newsletter.pragmaticengineer.com/p/mcp-deepdive) of 46 engineers found that building and maintaining MCP servers is becoming a routine part of the software engineering toolset.
+
+The protocol won. The question is no longer whether to build MCP servers, but how to build ones that do not break when reality hits them.
+
+I have been building MCP servers for internal tooling over the past few months, and the experience closely mirrors what I have seen with microservices over the years. The same production concerns apply: authentication, error handling, input validation, observability, testing, and graceful degradation. If you have read my [post on distributed systems patterns](/blog/building-scalable-systems), you will recognize the mindset. MCP servers are just another service in your architecture, and they deserve the same rigor.
+
+## What MCP Actually Is
+
+MCP is a JSON-RPC 2.0 protocol that defines how AI clients (Claude, ChatGPT, Cursor, your custom agent) communicate with servers that expose tools, resources, and prompts. Think of it as a standardized API layer between an LLM and your infrastructure.
+
+The architecture has three components:
+
+- **Client**: The AI application that needs to call external tools (Claude Desktop, an IDE plugin, your agent framework)
+- **Server**: Your code that exposes capabilities -- tools the agent can invoke, resources it can read, prompts it can use
+- **Transport**: How client and server communicate -- `stdio` for local processes, Streamable HTTP for remote deployments
+
+The key insight is that MCP servers are not web APIs for humans. They are APIs for AI agents. The agent reads your tool descriptions, decides when to call them, and interprets the results. This means your tool descriptions, error messages, and response structures need to be optimized for LLM consumption, not human consumption.
+
+## The Basic Server: What Tutorials Teach
+
+Here is what a minimal MCP server looks like using the official Python SDK with FastMCP:
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("deploy-tools")
+
+@mcp.tool()
+def get_deploy_status(service_name: str, environment: str) -> dict:
+    """Get the current deployment status for a service.
+
+    Args:
+        service_name: The name of the service (e.g., 'api-gateway', 'auth-service')
+        environment: The target environment ('staging' or 'production')
+
+    Returns:
+        A dict with keys: service, environment, status, version, deployed_at
+    """
+    # In reality, this calls your deployment API
+    status = deployment_api.get_status(service_name, environment)
+    return {
+        "service": service_name,
+        "environment": environment,
+        "status": status.state,
+        "version": status.version,
+        "deployed_at": status.timestamp.isoformat(),
+    }
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")
+```
+
+FastMCP handles the JSON-RPC protocol, generates JSON Schema from your type annotations, and manages the server lifecycle. This is the part every tutorial covers, and it works. The problem is everything it leaves out.
+
+## Production Concern 1: Input Validation
+
+A [2025 audit by Invariant Labs](https://www.practical-devsecops.com/mcp-security-vulnerabilities/) found that 43% of early MCP servers contained command injection vulnerabilities. The reason is straightforward: developers pass agent-supplied inputs directly into shell commands, database queries, or file operations without validation.
+
+MCP servers receive input from AI agents, and AI agents receive input from users. The entire prompt injection attack surface applies here. The [OWASP guide for secure MCP development](https://genai.owasp.org/resource/a-practical-guide-for-secure-mcp-server-development/) is explicit: never trust agent-supplied parameters.
+
+```python
+import re
+from enum import Enum
+from pydantic import BaseModel, field_validator
+
+class Environment(str, Enum):
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+class DeployStatusRequest(BaseModel):
+    service_name: str
+    environment: Environment
+
+    @field_validator("service_name")
+    @classmethod
+    def validate_service_name(cls, v: str) -> str:
+        if not re.match(r"^[a-z][a-z0-9\-]{1,62}[a-z0-9]$", v):
+            raise ValueError(
+                "service_name must be lowercase alphanumeric with hyphens, "
+                "3-64 characters"
+            )
+        return v
+
+@mcp.tool()
+def get_deploy_status(service_name: str, environment: str) -> dict:
+    """Get the current deployment status for a service.
+
+    Args:
+        service_name: Lowercase alphanumeric with hyphens (e.g., 'api-gateway')
+        environment: Must be 'staging' or 'production'
+    """
+    req = DeployStatusRequest(
+        service_name=service_name,
+        environment=environment,
+    )
+    status = deployment_api.get_status(req.service_name, req.environment.value)
+    return {
+        "service": req.service_name,
+        "environment": req.environment.value,
+        "status": status.state,
+        "version": status.version,
+        "deployed_at": status.timestamp.isoformat(),
+    }
+```
+
+Use Pydantic models for every tool input. Constrain enums. Validate patterns. Never construct shell commands or SQL from raw agent input. This is the same discipline you apply to any public API, but it matters more here because the caller is an LLM that can be manipulated through prompt injection.
+
+## Production Concern 2: Error Handling and Graceful Degradation
+
+When a tool fails, the agent needs to understand what went wrong and whether to retry. A raw Python traceback is useless to an LLM. Structured error responses are not optional.
+
+```python
+import logging
+from mcp.server.fastmcp import FastMCP, Context
+
+logger = logging.getLogger(__name__)
+
+class ToolError(Exception):
+    def __init__(self, message: str, retryable: bool = False):
+        self.message = message
+        self.retryable = retryable
+        super().__init__(message)
+
+@mcp.tool()
+async def get_deploy_status(
+    service_name: str,
+    environment: str,
+    ctx: Context,
+) -> dict:
+    """Get the current deployment status for a service."""
+    try:
+        req = DeployStatusRequest(
+            service_name=service_name,
+            environment=environment,
+        )
+    except ValueError as e:
+        return {
+            "error": str(e),
+            "retryable": False,
+            "hint": "Check service_name format and environment values",
+        }
+
+    try:
+        status = await deployment_api.get_status(
+            req.service_name, req.environment.value
+        )
+    except deployment_api.ServiceNotFound:
+        return {
+            "error": f"Service '{req.service_name}' not found",
+            "retryable": False,
+            "hint": "Use list_services tool to see available services",
+        }
+    except deployment_api.APITimeout:
+        logger.warning(
+            "Deployment API timeout for %s/%s",
+            req.service_name,
+            req.environment.value,
+        )
+        await ctx.report_progress(0, 1, "Deployment API is slow, retrying...")
+        return {
+            "error": "Deployment API timed out",
+            "retryable": True,
+            "hint": "The deployment API is experiencing delays. Try again.",
+        }
+    except Exception:
+        logger.exception("Unexpected error in get_deploy_status")
+        return {
+            "error": "Internal server error",
+            "retryable": False,
+            "hint": "Contact the platform team if this persists",
+        }
+
+    return {
+        "service": req.service_name,
+        "environment": req.environment.value,
+        "status": status.state,
+        "version": status.version,
+        "deployed_at": status.timestamp.isoformat(),
+    }
+```
+
+Three principles here. First, return structured error objects with `error`, `retryable`, and `hint` fields. The agent can use `retryable` to decide whether to try again, and `hint` to guide its next action. Second, use the `Context` object to report progress on long-running operations -- the client can surface this to the user. Third, log everything server-side but never leak internal details (stack traces, connection strings, internal hostnames) to the agent.
+
+This mirrors the circuit breaker and retry patterns from distributed systems. If your downstream API is down, the agent should know it can retry. If the input is invalid, retrying is pointless. Make this distinction explicit.
+
+## Production Concern 3: Authentication and Authorization
+
+As of the March 2025 specification update, [OAuth 2.1 is mandatory](https://modelcontextprotocol.io/docs/tutorials/security/authorization) for HTTP-based MCP transports. For `stdio` transports running locally, the host process handles security. But for any remote deployment -- which is what production means -- you need proper auth.
+
+The practical approach for most teams is to verify bearer tokens in middleware rather than implementing a full OAuth server from scratch:
+
+```python
+import os
+import jwt
+from functools import wraps
+from datetime import datetime, timezone
+
+JWT_SECRET = os.environ["MCP_JWT_SECRET"]
+ALLOWED_SCOPES = {"deploy:read", "deploy:write", "services:list"}
+
+def verify_token(token: str) -> dict:
+    """Verify JWT and return claims. Raises on invalid tokens."""
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub", "scopes"]},
+        )
+    except jwt.ExpiredSignatureError:
+        raise ToolError("Token expired", retryable=False)
+    except jwt.InvalidTokenError as e:
+        raise ToolError(f"Invalid token: {e}", retryable=False)
+
+    return payload
+
+def require_scope(scope: str):
+    """Decorator to enforce scope-based authorization on tools."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            ctx = kwargs.get("ctx")
+            if ctx is None:
+                raise ToolError("Missing context", retryable=False)
+
+            token = ctx.request_context.get("auth_token", "")
+            claims = verify_token(token)
+            user_scopes = set(claims.get("scopes", []))
+
+            if scope not in user_scopes:
+                raise ToolError(
+                    f"Insufficient permissions. Required: {scope}",
+                    retryable=False,
+                )
+
+            kwargs["_claims"] = claims
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+@mcp.tool()
+@require_scope("deploy:read")
+async def get_deploy_status(
+    service_name: str,
+    environment: str,
+    ctx: Context,
+    _claims: dict = None,
+) -> dict:
+    """Get deployment status. Requires deploy:read scope."""
+    # _claims contains the verified JWT payload
+    logger.info(
+        "deploy_status_check user=%s service=%s env=%s",
+        _claims["sub"],
+        service_name,
+        environment,
+    )
+    # ... rest of implementation
+```
+
+Scope your permissions narrowly. A monitoring agent should have `deploy:read` but not `deploy:write`. An incident response agent might need `deploy:write` for rollbacks but not `services:delete`. The [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) lists over-permissive default configurations as a top vulnerability. Principle of least privilege is not optional.
+
+## Production Concern 4: Observability
+
+When an agent calls your MCP server and gets an unexpected result, you need to trace the entire request. Who called it, what parameters were sent, what happened downstream, how long it took, and what was returned. Without this, debugging agent behavior is guesswork.
+
+```python
+import time
+import uuid
+import logging
+import structlog
+
+logger = structlog.get_logger()
+
+def with_observability(func):
+    """Wrap tool calls with structured logging and timing."""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        request_id = str(uuid.uuid4())[:8]
+        tool_name = func.__name__
+        start = time.monotonic()
+
+        log = logger.bind(
+            request_id=request_id,
+            tool=tool_name,
+            params={
+                k: v for k, v in kwargs.items()
+                if k not in ("ctx", "_claims")
+            },
+        )
+        log.info("tool_invoked")
+
+        try:
+            result = await func(*args, **kwargs)
+            elapsed = time.monotonic() - start
+            log.info(
+                "tool_completed",
+                duration_ms=round(elapsed * 1000, 2),
+                has_error="error" in result if isinstance(result, dict) else False,
+            )
+            return result
+        except Exception as e:
+            elapsed = time.monotonic() - start
+            log.error(
+                "tool_failed",
+                duration_ms=round(elapsed * 1000, 2),
+                error=str(e),
+            )
+            raise
+    return wrapper
+
+@mcp.tool()
+@with_observability
+async def get_deploy_status(service_name: str, environment: str, ctx: Context) -> dict:
+    """Get the current deployment status for a service."""
+    # ... implementation
+```
+
+FastMCP 3.0 (released January 2026) added [OpenTelemetry instrumentation](https://github.com/jlowin/fastmcp) as a built-in feature, which gives you distributed tracing out of the box. If you are running multiple MCP servers behind a gateway, OTel traces let you follow a request from the agent through the gateway and into each server. Use it.
+
+Surface rate limits and latency hints in your responses so agents can budget their calls. If your tool is expensive, say so in the response metadata. A well-behaved agent framework will use this to avoid hammering slow endpoints.
+
+## Production Concern 5: Testing
+
+You cannot ship an MCP server with manual testing alone. The good news is that FastMCP makes programmatic testing straightforward with its built-in test client:
+
+```python
+import pytest
+from mcp.server.fastmcp import FastMCP
+
+@pytest.fixture
+def mcp_server():
+    server = FastMCP("test-deploy-tools")
+
+    @server.tool()
+    async def get_deploy_status(service_name: str, environment: str) -> dict:
+        if service_name == "nonexistent":
+            return {"error": "Service not found", "retryable": False}
+        return {
+            "service": service_name,
+            "environment": environment,
+            "status": "running",
+            "version": "1.2.3",
+        }
+
+    return server
+
+@pytest.mark.anyio
+async def test_valid_deploy_status(mcp_server):
+    async with mcp_server.test_client() as client:
+        result = await client.call_tool(
+            "get_deploy_status",
+            {"service_name": "api-gateway", "environment": "staging"},
+        )
+        assert result[0].text
+        data = json.loads(result[0].text)
+        assert data["status"] == "running"
+        assert data["service"] == "api-gateway"
+
+@pytest.mark.anyio
+async def test_invalid_service_name(mcp_server):
+    async with mcp_server.test_client() as client:
+        result = await client.call_tool(
+            "get_deploy_status",
+            {"service_name": "nonexistent", "environment": "staging"},
+        )
+        data = json.loads(result[0].text)
+        assert "error" in data
+        assert data["retryable"] is False
+
+@pytest.mark.anyio
+async def test_tool_listing(mcp_server):
+    async with mcp_server.test_client() as client:
+        tools = await client.list_tools()
+        tool_names = [t.name for t in tools]
+        assert "get_deploy_status" in tool_names
+```
+
+Test at three levels. Unit tests for your validation logic and business functions. Integration tests using the MCP test client to verify the full tool invocation path. And manual exploratory testing with [MCP Inspector](https://agnost.ai/blog/testing-mcp-servers-complete-guide/) to verify that tool descriptions are clear enough for agents to use correctly. If an agent consistently misuses your tool, the problem is usually in your tool description, not in the agent.
+
+## Production Concern 6: Rate Limiting and Resource Management
+
+MCP servers that wrap external APIs inherit those APIs' rate limits. An enthusiastic agent can exhaust your API quota in minutes if you do not set boundaries:
+
+```python
+import time
+from collections import defaultdict
+
+class RateLimiter:
+    def __init__(self, max_calls: int, window_seconds: int):
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self.calls: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, key: str) -> bool:
+        now = time.monotonic()
+        window_start = now - self.window
+        self.calls[key] = [t for t in self.calls[key] if t > window_start]
+        if len(self.calls[key]) >= self.max_calls:
+            return False
+        self.calls[key].append(now)
+        return True
+
+rate_limiter = RateLimiter(max_calls=30, window_seconds=60)
+
+@mcp.tool()
+async def get_deploy_status(service_name: str, environment: str, ctx: Context) -> dict:
+    """Get deployment status. Rate limited to 30 calls per minute."""
+    caller = ctx.request_context.get("client_id", "anonymous")
+    if not rate_limiter.check(caller):
+        return {
+            "error": "Rate limit exceeded. Max 30 calls per minute.",
+            "retryable": True,
+            "hint": "Wait before retrying. Consider batching requests.",
+            "retry_after_seconds": 60,
+        }
+    # ... rest of implementation
+```
+
+Include rate limit information in your tool descriptions so the agent knows the constraints before hitting them. Return `retry_after_seconds` so the agent can back off intelligently. This is the same pattern you would use in any public API, and it matters even more here because agents lack the intuition to self-throttle.
+
+## Deployment: Transport and Architecture
+
+For local development and single-user setups, `stdio` transport is the simplest option. The MCP client spawns your server as a subprocess. No networking, no auth complexity.
+
+For production multi-user deployments, use Streamable HTTP. The older SSE transport was [deprecated in the June 2025 specification](https://thenewstack.io/15-best-practices-for-building-mcp-servers-in-production/) in favor of Streamable HTTP, which supports bidirectional communication, horizontal scaling, and incremental results:
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP(
+    "deploy-tools",
+    host="0.0.0.0",
+    port=8080,
+)
+
+# Register all your tools, resources, prompts...
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http")
+```
+
+For production, put your MCP server behind a reverse proxy (nginx, Caddy) that handles TLS termination and certificate management. The server itself runs plain HTTP internally; the proxy adds the encryption layer. This is the same pattern you use for any backend service.
+
+If you are running multiple MCP servers, consider an MCP gateway that handles routing, auth, and observability centrally. [WorkOS](https://workos.com/blog/2026-mcp-roadmap-enterprise-readiness) and several open-source projects are building gateway layers for exactly this pattern. It mirrors the API gateway pattern from microservices -- centralized cross-cutting concerns with decentralized business logic.
+
+## What I Have Learned So Far
+
+Building MCP servers for production has reinforced patterns I already knew from backend engineering, with a few MCP-specific additions:
+
+1. **Treat MCP servers like microservices.** They need the same auth, validation, error handling, logging, and testing discipline as any service in your architecture. The fact that the caller is an AI agent does not reduce these requirements -- it increases them.
+
+2. **Tool descriptions are your API documentation.** Agents decide whether and how to call your tools based on the descriptions you write. Vague descriptions lead to misuse. Include parameter constraints, return value formats, and error conditions directly in the docstring.
+
+3. **Validate aggressively.** The OWASP MCP Top 10 exists for a reason. Agent inputs come from users, and users can be adversarial. Pydantic models, enum constraints, and regex patterns are your first line of defense.
+
+4. **Return structured errors.** An error dict with `error`, `retryable`, and `hint` fields gives agents the information they need to recover or fail gracefully. A Python traceback gives them nothing useful.
+
+5. **Invest in observability early.** When an agent misbehaves, you need to see exactly what it sent and what your server returned. Structured logging with request IDs and timing is the minimum. OpenTelemetry tracing is the goal.
+
+6. **Start with `stdio`, deploy with Streamable HTTP.** Develop and test locally with stdio transport. When you need remote access, multi-user support, or horizontal scaling, switch to Streamable HTTP behind a reverse proxy with TLS.
+
+The [2026 MCP roadmap](https://thenewstack.io/model-context-protocol-roadmap-2026/) prioritizes exactly the enterprise concerns I have described here: audit trails, SSO-integrated auth, gateway behavior, and configuration portability. The protocol is maturing fast. The servers built on top of it need to mature at the same pace.
+
+MCP is not complicated technology. It is a standardized way to expose your existing infrastructure to AI agents. The production challenges are the same ones backend engineers have been solving for decades. Apply what you already know.

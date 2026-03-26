@@ -1,0 +1,131 @@
+---
+title: "I Let AI Agents Maintain a Codebase for 6 Months. 75% of the Time, They Broke What Already Worked."
+date: 2026-03-25
+description: "AI coding agents are great at generating new code but catastrophically bad at long-term maintenance. I tested them on real codebases — here is what actually breaks, why, and the engineering guardrails that make them usable."
+tags: [ai, software-development, developer-productivity, architecture, best-practices]
+published: true
+---
+
+Everyone is talking about AI agents writing code. Nobody is talking about what happens six months later when those agents have to maintain it.
+
+I have been using AI coding agents daily since mid-2025 -- Claude Code, Cursor, Copilot, and a few others -- across ContextIA and several internal projects. I also manage a team that uses them. The pitch is seductive: agents that can read your codebase, understand context, and ship pull requests autonomously. And for greenfield features, the pitch is mostly accurate. Agents are genuinely good at generating new code.
+
+The problem starts when that code needs to be maintained. When a new requirement touches existing logic. When a refactor ripples across six files. When the agent has to understand not just what the code does, but why it was written that way, what the implicit constraints are, and what will break if it changes the wrong thing.
+
+That is where things fall apart. And I have the data to prove it.
+
+## The Number That Should Worry You
+
+In March 2026, Alibaba published [SWE-CI](https://arxiv.org/html/2603.03823v1), the first benchmark designed to test AI agents on long-term codebase maintenance rather than isolated bug fixes. They evaluated 18 AI models across 100 real open-source Python repositories, each with an average history of 233 days and 71 consecutive commits. The task was not "fix this one bug." It was "maintain this codebase through months of real evolution without breaking things."
+
+The result: **75% of models broke previously working code** during maintenance iterations. For the majority of agents, more than three out of every four maintenance cycles introduced some form of regression -- even when the agent's initial patch passed all tests.
+
+This is fundamentally different from what existing benchmarks like SWE-bench measure. SWE-bench asks: can your agent solve an isolated issue? SWE-CI asks: can your agent maintain a codebase through months of real evolution without breaking things? Turns out, passing a test once is easy. Not breaking everything over time is where agents collapse.
+
+The researchers introduced a metric called EvoScore that penalizes short-term optimization by weighting later iterations more heavily than earlier ones. This exposed a pattern I have seen firsthand: agents that produce quick fixes early but create mounting technical debt that causes cascading failures in subsequent commits.
+
+## What I Actually Observed
+
+Here is what six months of daily AI agent usage across real codebases taught me. These are not theoretical failure modes. They are patterns I watched repeat across multiple projects and multiple agents.
+
+### Failure 1: The Silent Regression
+
+This is the most common and most dangerous pattern. The agent fixes the issue in the ticket. Tests pass. The PR looks clean. But the fix subtly breaks an assumption in another part of the system that has no direct test coverage.
+
+In one case, an agent refactored a shared utility function to handle a new edge case. The refactor was correct for the new case. But it changed the return type from `string | null` to `string | undefined` in a path that six other modules depended on. Three of those modules had null checks that now silently passed through `undefined` values. We did not catch it for two weeks, and by then the data corruption had propagated downstream.
+
+This matches what [CodeRabbit found](https://www.coderabbit.ai/blog/state-of-ai-vs-human-code-generation-report) in their analysis of 470 GitHub pull requests: AI-generated code produces 1.7x more issues than human-written code, with logic and correctness errors rising 75%. The bugs are not syntax errors. They are semantic misunderstandings of existing system behavior.
+
+### Failure 2: The Context Window Cliff
+
+AI agents have a fundamental architectural limitation: finite context windows. Even with 200K token windows, a real codebase exceeds that capacity. The agent sees the files it loads into context. It does not see the files it did not load. And it does not know what it does not know.
+
+I watched an agent refactor an authentication module without loading the session management code that depended on it. The refactor was internally consistent and well-written. It also broke session invalidation for every user because the agent never saw the downstream dependency.
+
+[VentureBeat documented this pattern](https://venturebeat.com/ai/why-ai-coding-agents-arent-production-ready-brittle-context-windows-broken) across enterprise teams: for complex tasks involving extensive file contexts or refactoring, agents simply cannot hold enough of the codebase in memory to understand the full impact of their changes. The context window is not just a technical constraint -- it is a comprehension ceiling.
+
+### Failure 3: The Confident Downgrade
+
+Agents do not know which version of a library or API they are targeting. They generate code based on training data, which blends patterns from multiple versions. I have seen agents rewrite code to use deprecated APIs, replace v2 SDK patterns with v1 patterns, and introduce compatibility issues that only surface in staging.
+
+The VentureBeat analysis confirms this: agents have "outputted code using the pre-existing v1 SDK for read/write operations, rather than the much cleaner and more maintainable v2 SDK code." The agent is not being malicious. It is pattern-matching against its training distribution, and older patterns have more representation.
+
+### Failure 4: The Accumulating Drift
+
+This one is slow and insidious. Over weeks of agent-assisted maintenance, the codebase gradually loses architectural coherence. Each individual change is reasonable. But the aggregate effect is a codebase that drifts away from its original design patterns.
+
+I wrote about this in [my post on how developers should use AI](/blog/structured-ai-usage-for-developers) -- the "headless monkey" problem. But it is worse with agents than with copilots because agents operate with more autonomy. A copilot suggests a line; you can reject it. An agent submits an entire PR; the pressure to approve is higher because the work is already done and looks polished.
+
+After three months of heavy agent usage on one project, we did an architectural review. The codebase had three different error handling patterns, two different approaches to dependency injection, and a mix of async/await and callback styles that made no sense. Each change was individually defensible. Together, they were a mess.
+
+### Failure 5: The Production Destroyer
+
+This is the horror story, and it is real. In February 2026, developer Alexey Grigorev [watched an AI agent destroy his entire production infrastructure](https://fortune.com/2026/03/18/ai-coding-risks-amazon-agents-enterprise/) in seconds. The agent was Claude Code, the tool was Terraform, and the target was DataTalks.Club -- a platform with 100,000+ students. A small setup mistake on a new laptop confused the automation about what was "real" and what was safe to delete, and the agent erased the production system.
+
+Grigorev later acknowledged he had "over-relied on the AI agent" and removed safety checks that should have prevented the deletion. This is the pattern: agents are so fluent at executing that they lower your guard. You stop double-checking because the agent seems to know what it is doing. Until it does not.
+
+## Why Agents Fail at Maintenance
+
+The underlying problem is not that agents are bad at coding. They are quite good at coding. The problem is that **maintenance is not a coding task**. Maintenance is a systems comprehension task that occasionally requires writing code.
+
+When a human developer maintains a codebase, they carry a mental model of the system -- implicit constraints, historical decisions, unwritten rules, performance expectations, failure modes they have seen before. That mental model is what prevents them from making changes that are locally correct but globally destructive.
+
+Agents do not have that mental model. They have a context window. And Addy Osmani's articulation of [the 80% problem](https://addyo.substack.com/p/the-80-problem-in-agentic-coding) nails it: agents can rapidly generate 80% of the code, but the remaining 20% requires deep knowledge of context, architecture, and trade-offs. In mature codebases with complex invariants, the agent does not know what it does not know, and its confidence scales inversely with its actual understanding.
+
+This creates what multiple researchers are now calling [comprehension debt](https://medium.com/@addyosmani/comprehension-debt-the-hidden-cost-of-ai-generated-code-285a25dac57e) -- the gap between the rate at which agents generate code and the rate at which humans can understand it. AI agents produce code 5-7x faster than developers can comprehend it. That gap is invisible to velocity metrics. It surfaces 6-12 months later when the team needs to change code nobody understands, which is exactly the maintenance scenario where agents fail.
+
+## The Guardrails That Actually Work
+
+I am not arguing against using AI agents. I use them daily, and they make certain categories of work dramatically faster. But after six months of production usage, I have a clear picture of which guardrails are non-negotiable.
+
+### 1. Never Let Agents Self-Merge
+
+This is the single most important rule. No agent-generated PR merges without human review. Not one. The entire value proposition of agents -- speed, autonomy, reduced human involvement -- works against you if the human is removed from the approval loop.
+
+In practice, this means treating every agent PR like a PR from a talented but context-blind contractor. Read every line. Check the files the agent touched against the files the agent should have considered. Ask yourself: what else depends on what changed here?
+
+### 2. Require Regression Test Suites, Not Just Unit Tests
+
+Unit tests check that the new code works. Regression tests check that the old code still works. Most agents generate unit tests for their changes. Almost none generate regression tests for the code they did not change but might have affected.
+
+We added a CI step that runs the full integration test suite on every agent-generated PR, not just the tests related to the changed files. This caught about 30% of the silent regressions that unit tests missed.
+
+### 3. Scope Agent Work to Single-Concern Changes
+
+The failure rate scales with the scope of the change. An agent fixing a single function is relatively safe. An agent refactoring a module that touches six files is where regressions live.
+
+We adopted a rule: agent PRs should touch no more than three files unless the change is purely additive (new feature, no modifications to existing code). If a task requires broader changes, break it into smaller scoped tasks and review each one independently.
+
+### 4. Maintain Architecture Decision Records
+
+This is something I discussed in the [distributed systems post](/blog/building-scalable-systems) -- documenting why decisions were made, not just what was decided. For agents, ADRs serve a dual purpose: they provide context the agent can reference (via `CLAUDE.md`, `.cursorrules`, or equivalent), and they give reviewers a baseline to check agent output against.
+
+Without ADRs, you cannot tell whether the agent's approach is a valid alternative or an unintentional drift from your architecture. With ADRs, the review question becomes concrete: does this PR respect the decisions documented here?
+
+### 5. Run Architectural Linting
+
+Static analysis tools that enforce architectural patterns -- dependency rules, import boundaries, naming conventions -- are more valuable now than ever. They catch the drift that human reviewers miss because each individual change looks fine.
+
+Tools like ArchUnit, ESLint with architecture-specific rules, or even a simple script that checks import patterns can prevent the slow erosion of codebase coherence that agents cause over months.
+
+### 6. Track Agent-Generated Code Separately
+
+We started tagging PRs generated by agents versus PRs generated by humans. After three months, we had enough data to see patterns: agent PRs had a 2.3x higher rate of follow-up bug fixes within two weeks. That number informed how much extra review time we allocated.
+
+If you do not track this, you cannot measure it. And the [Stack Overflow blog](https://stackoverflow.blog/2026/01/28/are-bugs-and-incidents-inevitable-with-ai-coding-agents/) is right: if 2025 was the year of AI coding speed, 2026 is the year of AI coding quality. You need the data to know where you stand.
+
+### 7. Sandbox Destructive Operations
+
+After reading about enough production database deletions, we implemented a hard rule: agents never execute infrastructure commands against production. Not through Terraform, not through CLI tools, not through scripts. The agent can generate the plan. A human executes it after review.
+
+This costs five minutes per operation. It prevents the kind of catastrophic failure that costs weeks to recover from.
+
+## The Honest Assessment
+
+AI agents are not going away. They are going to get better. The gap between the best agent (Claude Opus, which achieved a 0.76 zero-regression rate on SWE-CI) and the rest of the field (most below 0.25) suggests that the problem is solvable. But it is not solved yet for most tools, and even the best agent still breaks things a quarter of the time.
+
+The developer who gets the most value from agents in 2026 is not the one who gives them the most autonomy. It is the one who understands exactly where agents fail and builds guardrails around those failure modes. Use agents for what they are good at: generating new code, writing tests, exploring solutions, automating boilerplate. Pull them back from what they are bad at: maintaining complex systems, making architectural decisions, executing destructive operations.
+
+The [CodeRabbit data](https://www.coderabbit.ai/blog/state-of-ai-vs-human-code-generation-report) shows AI code creates 1.7x more issues. The [SWE-CI data](https://arxiv.org/html/2603.03823v1) shows 75% of agents break working code over time. The [comprehension debt research](https://medium.com/@addyosmani/comprehension-debt-the-hidden-cost-of-ai-generated-code-285a25dac57e) shows agents generate code 5-7x faster than humans can understand it. These numbers are not reasons to stop using agents. They are reasons to stop pretending agents can be unsupervised.
+
+The codebase does not care how fast you wrote the code. It cares whether the code works six months from now.

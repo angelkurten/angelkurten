@@ -1,0 +1,131 @@
+---
+title: "Deje que Agentes de IA Mantuvieran un Codebase por 6 Meses. El 75% de las Veces, Rompieron Lo Que Ya Funcionaba."
+date: 2026-03-25
+description: "Los agentes de IA son excelentes generando codigo nuevo pero catastroficamente malos en mantenimiento a largo plazo. Los probe en codebases reales — esto es lo que realmente se rompe, por que, y las barreras de ingenieria que los hacen utilizables."
+tags: [ai, software-development, developer-productivity, architecture, best-practices]
+published: true
+---
+
+Todo el mundo habla de agentes de IA escribiendo codigo. Nadie habla de lo que pasa seis meses despues cuando esos agentes tienen que mantenerlo.
+
+He usado agentes de IA a diario desde mediados de 2025 -- Claude Code, Cursor, Copilot, y varios otros -- en ContextIA y varios proyectos internos. Tambien gestiono un equipo que los usa. La propuesta es seductora: agentes que leen tu codebase, entienden el contexto, y envian pull requests de forma autonoma. Y para features nuevos desde cero, la propuesta es mayormente correcta. Los agentes son genuinamente buenos generando codigo nuevo.
+
+El problema empieza cuando ese codigo necesita mantenimiento. Cuando un nuevo requerimiento toca logica existente. Cuando un refactor se propaga por seis archivos. Cuando el agente tiene que entender no solo que hace el codigo, sino por que fue escrito de esa manera, cuales son las restricciones implicitas, y que se rompera si cambia lo que no debe.
+
+Ahi es donde todo se desmorona. Y tengo los datos para demostrarlo.
+
+## El Numero Que Deberia Preocuparte
+
+En marzo de 2026, Alibaba publico [SWE-CI](https://arxiv.org/html/2603.03823v1), el primer benchmark disenado para evaluar agentes de IA en mantenimiento a largo plazo en lugar de correcciones aisladas de bugs. Evaluaron 18 modelos de IA en 100 repositorios reales de Python open-source, cada uno con un historial promedio de 233 dias y 71 commits consecutivos. La tarea no era "corrige este bug." Era "manten este codebase a traves de meses de evolucion real sin romper cosas."
+
+El resultado: **el 75% de los modelos rompieron codigo que antes funcionaba** durante las iteraciones de mantenimiento. Para la mayoria de los agentes, mas de tres de cada cuatro ciclos de mantenimiento introdujeron alguna forma de regresion -- incluso cuando el parche inicial del agente pasaba todos los tests.
+
+Esto es fundamentalmente diferente de lo que miden benchmarks existentes como SWE-bench. SWE-bench pregunta: puede tu agente resolver un problema aislado? SWE-CI pregunta: puede tu agente mantener un codebase a traves de meses de evolucion real sin romper cosas? Resulta que pasar un test una vez es facil. No romper todo con el tiempo es donde los agentes colapsan.
+
+Los investigadores introdujeron una metrica llamada EvoScore que penaliza la optimizacion a corto plazo al ponderar las iteraciones posteriores mas que las iniciales. Esto expuso un patron que he visto de primera mano: agentes que producen correcciones rapidas al principio pero crean deuda tecnica creciente que causa fallos en cascada en commits subsiguientes.
+
+## Lo Que Realmente Observe
+
+Esto es lo que seis meses de uso diario de agentes de IA en codebases reales me ensenaron. Estos no son modos de falla teoricos. Son patrones que vi repetirse en multiples proyectos y multiples agentes.
+
+### Falla 1: La Regresion Silenciosa
+
+Este es el patron mas comun y mas peligroso. El agente corrige el issue del ticket. Los tests pasan. El PR se ve limpio. Pero la correccion rompe sutilmente una suposicion en otra parte del sistema que no tiene cobertura directa de tests.
+
+En un caso, un agente refactorizo una funcion utilitaria compartida para manejar un nuevo caso borde. El refactor era correcto para el nuevo caso. Pero cambio el tipo de retorno de `string | null` a `string | undefined` en una ruta de la que dependian seis otros modulos. Tres de esos modulos tenian verificaciones de null que ahora dejaban pasar silenciosamente valores `undefined`. No lo detectamos en dos semanas, y para entonces la corrupcion de datos se habia propagado downstream.
+
+Esto coincide con lo que [CodeRabbit encontro](https://www.coderabbit.ai/blog/state-of-ai-vs-human-code-generation-report) en su analisis de 470 pull requests de GitHub: el codigo generado por IA produce 1.7x mas problemas que el codigo escrito por humanos, con errores de logica y correctitud aumentando un 75%. Los bugs no son errores de sintaxis. Son malentendidos semanticos del comportamiento existente del sistema.
+
+### Falla 2: El Precipicio del Context Window
+
+Los agentes de IA tienen una limitacion arquitectonica fundamental: context windows finitos. Incluso con ventanas de 200K tokens, un codebase real excede esa capacidad. El agente ve los archivos que carga en contexto. No ve los archivos que no cargo. Y no sabe lo que no sabe.
+
+Vi a un agente refactorizar un modulo de autenticacion sin cargar el codigo de gestion de sesiones que dependia de el. El refactor era internamente consistente y estaba bien escrito. Tambien rompio la invalidacion de sesiones para todos los usuarios porque el agente nunca vio la dependencia downstream.
+
+[VentureBeat documento este patron](https://venturebeat.com/ai/why-ai-coding-agents-arent-production-ready-brittle-context-windows-broken) en equipos enterprise: para tareas complejas que involucran contextos extensos de archivos o refactoring, los agentes simplemente no pueden mantener suficiente del codebase en memoria para entender el impacto completo de sus cambios. El context window no es solo una restriccion tecnica -- es un techo de comprension.
+
+### Falla 3: El Downgrade Seguro de Si Mismo
+
+Los agentes no saben a que version de una libreria o API apuntan. Generan codigo basado en datos de entrenamiento que mezclan patrones de multiples versiones. He visto agentes reescribir codigo para usar APIs deprecadas, reemplazar patrones de SDK v2 con patrones de v1, e introducir problemas de compatibilidad que solo aparecen en staging.
+
+El analisis de VentureBeat lo confirma: los agentes "generaron codigo usando el SDK v1 preexistente para operaciones de lectura/escritura, en lugar del codigo del SDK v2 mucho mas limpio y mantenible." El agente no esta siendo malicioso. Esta haciendo pattern-matching contra su distribucion de entrenamiento, y los patrones mas antiguos tienen mayor representacion.
+
+### Falla 4: La Deriva Acumulativa
+
+Esta es lenta e insidiosa. A lo largo de semanas de mantenimiento asistido por agentes, el codebase pierde gradualmente coherencia arquitectonica. Cada cambio individual es razonable. Pero el efecto agregado es un codebase que se aleja de sus patrones de diseno originales.
+
+Escribi sobre esto en [mi post sobre como los desarrolladores deberian usar la IA](/es/blog/structured-ai-usage-for-developers) -- el problema del "mono sin cabeza." Pero es peor con agentes que con copilots porque los agentes operan con mas autonomia. Un copilot sugiere una linea; puedes rechazarla. Un agente envia un PR completo; la presion para aprobarlo es mayor porque el trabajo ya esta hecho y se ve pulido.
+
+Despues de tres meses de uso intensivo de agentes en un proyecto, hicimos una revision arquitectonica. El codebase tenia tres patrones diferentes de manejo de errores, dos enfoques distintos de inyeccion de dependencias, y una mezcla de async/await y callbacks que no tenia sentido. Cada cambio era individualmente defendible. Juntos, eran un desastre.
+
+### Falla 5: El Destructor de Produccion
+
+Esta es la historia de terror, y es real. En febrero de 2026, el desarrollador Alexey Grigorev [vio como un agente de IA destruia toda su infraestructura de produccion](https://fortune.com/2026/03/18/ai-coding-risks-amazon-agents-enterprise/) en segundos. El agente era Claude Code, la herramienta era Terraform, y el objetivo era DataTalks.Club -- una plataforma con mas de 100,000 estudiantes. Un pequeno error de configuracion en un laptop nuevo confundio a la automatizacion sobre que era "real" y que era seguro eliminar, y el agente borro el sistema de produccion.
+
+Grigorev luego reconocio que habia "sobredependido del agente de IA" y habia eliminado las verificaciones de seguridad que deberian haber prevenido la eliminacion. Este es el patron: los agentes son tan fluidos ejecutando que bajan tu guardia. Dejas de verificar porque el agente parece saber lo que hace. Hasta que no lo sabe.
+
+## Por Que los Agentes Fallan en Mantenimiento
+
+El problema subyacente no es que los agentes sean malos programando. Son bastante buenos programando. El problema es que **el mantenimiento no es una tarea de programacion**. El mantenimiento es una tarea de comprension de sistemas que ocasionalmente requiere escribir codigo.
+
+Cuando un desarrollador humano mantiene un codebase, carga un modelo mental del sistema -- restricciones implicitas, decisiones historicas, reglas no escritas, expectativas de rendimiento, modos de falla que ha visto antes. Ese modelo mental es lo que previene que haga cambios que son localmente correctos pero globalmente destructivos.
+
+Los agentes no tienen ese modelo mental. Tienen un context window. Y la articulacion de Addy Osmani sobre [el problema del 80%](https://addyo.substack.com/p/the-80-problem-in-agentic-coding) lo clava: los agentes pueden generar rapidamente el 80% del codigo, pero el 20% restante requiere conocimiento profundo de contexto, arquitectura y trade-offs. En codebases maduros con invariantes complejas, el agente no sabe lo que no sabe, y su confianza escala inversamente con su comprension real.
+
+Esto crea lo que multiples investigadores ahora llaman [deuda de comprension](https://medium.com/@addyosmani/comprehension-debt-the-hidden-cost-of-ai-generated-code-285a25dac57e) -- la brecha entre la velocidad a la que los agentes generan codigo y la velocidad a la que los humanos pueden entenderlo. Los agentes de IA producen codigo 5-7x mas rapido de lo que los desarrolladores pueden comprender. Esa brecha es invisible para las metricas de velocidad. Aparece 6-12 meses despues cuando el equipo necesita cambiar codigo que nadie entiende, que es exactamente el escenario de mantenimiento donde los agentes fallan.
+
+## Las Barreras Que Realmente Funcionan
+
+No estoy argumentando en contra de usar agentes de IA. Los uso a diario, y hacen que ciertas categorias de trabajo sean dramaticamente mas rapidas. Pero despues de seis meses de uso en produccion, tengo una imagen clara de cuales barreras son innegociables.
+
+### 1. Nunca Dejes Que los Agentes Hagan Self-Merge
+
+Esta es la regla mas importante. Ningun PR generado por agentes se mergea sin revision humana. Ni uno. Toda la propuesta de valor de los agentes -- velocidad, autonomia, menor involucramiento humano -- juega en tu contra si se elimina al humano del ciclo de aprobacion.
+
+En la practica, esto significa tratar cada PR de agente como un PR de un contractor talentoso pero ciego al contexto. Lee cada linea. Verifica los archivos que el agente toco contra los archivos que debio haber considerado. Preguntate: que mas depende de lo que cambio aqui?
+
+### 2. Exige Suites de Tests de Regresion, No Solo Tests Unitarios
+
+Los tests unitarios verifican que el codigo nuevo funciona. Los tests de regresion verifican que el codigo viejo sigue funcionando. La mayoria de los agentes genera tests unitarios para sus cambios. Casi ninguno genera tests de regresion para el codigo que no cambio pero que podria haber afectado.
+
+Agregamos un paso de CI que ejecuta la suite completa de tests de integracion en cada PR generado por agentes, no solo los tests relacionados con los archivos cambiados. Esto capturo aproximadamente el 30% de las regresiones silenciosas que los tests unitarios no detectaron.
+
+### 3. Limita el Trabajo del Agente a Cambios de Una Sola Responsabilidad
+
+La tasa de fallas escala con el alcance del cambio. Un agente corrigiendo una sola funcion es relativamente seguro. Un agente refactorizando un modulo que toca seis archivos es donde viven las regresiones.
+
+Adoptamos una regla: los PRs de agentes no deben tocar mas de tres archivos a menos que el cambio sea puramente aditivo (feature nuevo, sin modificaciones a codigo existente). Si una tarea requiere cambios mas amplios, dividela en tareas mas pequenas y revisa cada una independientemente.
+
+### 4. Manten Architecture Decision Records
+
+Esto es algo que discuti en el [post de sistemas distribuidos](/es/blog/building-scalable-systems) -- documentar por que se tomaron las decisiones, no solo que se decidio. Para los agentes, los ADRs sirven un doble proposito: proveen contexto que el agente puede referenciar (via `CLAUDE.md`, `.cursorrules`, o equivalente), y le dan a los revisores una linea base contra la cual verificar el output del agente.
+
+Sin ADRs, no puedes saber si el enfoque del agente es una alternativa valida o una desviacion involuntaria de tu arquitectura. Con ADRs, la pregunta de revision se vuelve concreta: respeta este PR las decisiones documentadas aqui?
+
+### 5. Ejecuta Linting Arquitectonico
+
+Las herramientas de analisis estatico que refuerzan patrones arquitectonicos -- reglas de dependencia, limites de imports, convenciones de nombres -- son mas valiosas ahora que nunca. Capturan la deriva que los revisores humanos no detectan porque cada cambio individual se ve bien.
+
+Herramientas como ArchUnit, ESLint con reglas especificas de arquitectura, o incluso un script simple que verifica patrones de imports pueden prevenir la erosion lenta de coherencia del codebase que los agentes causan a lo largo de meses.
+
+### 6. Rastrea el Codigo Generado por Agentes por Separado
+
+Empezamos a etiquetar PRs generados por agentes versus PRs generados por humanos. Despues de tres meses, teniamos suficientes datos para ver patrones: los PRs de agentes tenian una tasa 2.3x mayor de correcciones de bugs subsiguientes dentro de dos semanas. Ese numero informo cuanto tiempo extra de revision asignamos.
+
+Si no lo rastreas, no puedes medirlo. Y el [blog de Stack Overflow](https://stackoverflow.blog/2026/01/28/are-bugs-and-incidents-inevitable-with-ai-coding-agents/) tiene razon: si 2025 fue el ano de la velocidad del codigo con IA, 2026 es el ano de la calidad del codigo con IA. Necesitas los datos para saber donde estas parado.
+
+### 7. Sandbox para Operaciones Destructivas
+
+Despues de leer sobre suficientes eliminaciones de bases de datos en produccion, implementamos una regla dura: los agentes nunca ejecutan comandos de infraestructura contra produccion. Ni a traves de Terraform, ni de herramientas CLI, ni de scripts. El agente puede generar el plan. Un humano lo ejecuta despues de revisarlo.
+
+Esto cuesta cinco minutos por operacion. Previene el tipo de falla catastrofica que cuesta semanas recuperar.
+
+## La Evaluacion Honesta
+
+Los agentes de IA no van a desaparecer. Van a mejorar. La brecha entre el mejor agente (Claude Opus, que logro una tasa de cero regresiones de 0.76 en SWE-CI) y el resto del campo (la mayoria por debajo de 0.25) sugiere que el problema es resoluble. Pero no esta resuelto aun para la mayoria de las herramientas, e incluso el mejor agente sigue rompiendo cosas una cuarta parte del tiempo.
+
+El desarrollador que obtiene mas valor de los agentes en 2026 no es el que les da mayor autonomia. Es el que entiende exactamente donde fallan los agentes y construye barreras alrededor de esos modos de falla. Usa los agentes para lo que son buenos: generar codigo nuevo, escribir tests, explorar soluciones, automatizar boilerplate. Retirarlos de lo que son malos: mantener sistemas complejos, tomar decisiones arquitectonicas, ejecutar operaciones destructivas.
+
+Los [datos de CodeRabbit](https://www.coderabbit.ai/blog/state-of-ai-vs-human-code-generation-report) muestran que el codigo de IA crea 1.7x mas problemas. Los [datos de SWE-CI](https://arxiv.org/html/2603.03823v1) muestran que el 75% de los agentes rompen codigo funcional con el tiempo. La [investigacion sobre deuda de comprension](https://medium.com/@addyosmani/comprehension-debt-the-hidden-cost-of-ai-generated-code-285a25dac57e) muestra que los agentes generan codigo 5-7x mas rapido de lo que los humanos pueden entenderlo. Estos numeros no son razones para dejar de usar agentes. Son razones para dejar de pretender que los agentes pueden funcionar sin supervision.
+
+Al codebase no le importa que tan rapido escribiste el codigo. Le importa si el codigo funciona dentro de seis meses.
