@@ -26,7 +26,7 @@ export function Header({ lang = "en" }: HeaderProps) {
   const otherLang: Locale = lang === "en" ? "es" : "en";
   const langSwitchHref = (() => {
     // Strip /es prefix if present, then build the other language path
-    const cleanPath = pathname.replace(/^\/es(?=\/|$)/, "") || "/";
+    const cleanPath = pathname.replace(/^\/(es|en)(?=\/|$)/, "") || "/";
     return getLocalizedPath(cleanPath, otherLang);
   })();
 
