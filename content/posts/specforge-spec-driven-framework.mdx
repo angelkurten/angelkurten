@@ -1,0 +1,163 @@
+---
+title: "SpecForge: The Framework I Built After a Year of Writing Almost No Code"
+date: 2026-04-09
+description: "I've been coding for 15 years, managing engineers for 6, and the last year I've barely touched code. I work from a single Claude Code session across five projects in parallel. SpecForge is the framework I beat out of that workflow: specs grounded against real code, four critical reviewers in parallel, and a hard gate that stops a PRD from saying one thing while the system does another."
+tags: [spec-driven-development, ai, llm, claude-code, software-development, framework]
+published: false
+---
+
+About six months ago I sat down on a Sunday night to finish a stupid little feature: a reporting endpoint that had been stuck for a few weeks. I opened Claude, gave it the PRD that four of us had written together, asked for the implementation, and walked off to make coffee. When I came back, the agent had written 600 lines of code, the tests were green, and it had even produced a self-approving doc page. I felt like a genius. For about three minutes.
+
+Three minutes, because when I actually looked at the diff with calm eyes I noticed that the agent had invented two helpers from our repo. They didn't exist. They had never existed. The model had given them a name, a signature, an import path, and had written code on top of them as if they were a normal part of the stack. The worst part isn't that it made them up. The worst part is that the spec didn't prevent it, the tests didn't catch it, and I would not have noticed it either if I didn't have the weird habit of going through imports one by one because I never quite trust the output.
+
+That Sunday was the start of what I now call SpecForge.
+
+I've been writing code for 15 years and managing engineering teams for 6. I started as the typical senior who pushed back on AI tooling ("this is glorified autocomplete"), went through my fanboy phase ("this changes everything"), and landed somewhere weird where today I write basically 0% of the code I ship. That's not a LinkedIn exaggeration. It's literal. I've been working with LLMs intensively for over a year, and the last six months I spent almost entirely inside Claude Code. I work all day from a single session, and that session jumps between five different projects: an onboarding platform, a payments backend, a mobile app in Expo, an internal Next dashboard, and a couple of infra scripts I keep maintaining out of inertia. I haven't manually touched a line in any of them in weeks.
+
+If something in that sentence sounds like hype, hold on, because the uncomfortable part is different: this only works for me because I forced myself into a process. And the process, after breaking it and rebuilding it a bunch of times, became something reproducible that I just published as an open framework: [SpecForge](https://github.com/angelkurten/specforge-framework).
+
+This post is the story of how I got there, why the process looks the way it does, and where it fits among the alternatives that already exist (Spec Kit, Kiro, BMAD, and friends).
+
+## The bottleneck isn't writing code. It's describing what you want.
+
+For the first few months of using LLMs seriously I convinced myself the bottleneck was prompt engineering. I wrote massive prompts, gave examples, dumped stack context, told the model who I was and what I wanted. Results got a little better and got worse in new ways.
+
+The real problem took its time landing. The bottleneck wasn't writing prompts. It was writing **specs**. And the specs I produced from LLM sessions had three chronic problems that I kept trying to fix with more text, when what I actually needed was more process.
+
+**The first one is silent hallucination.** The model invents endpoints, functions, modules, env variables, whole files. But not in obvious ways. It does it with the same confident tone it uses for things that actually exist. If you don't have the discipline to open the repo and verify every name, the spec reads perfectly until the moment the implementation explodes. I documented this with data in my earlier post on [AI agents breaking codebases](/blog/ai-agents-breaking-codebases): 75% of agents break previously working code during maintenance cycles. When I first read that number I thought it was exaggerated. After auditing myself for a month I understood it was conservative.
+
+**The second one is drift.** You write a clean PRD, you ship it, you archive it in some `/docs` folder no one opens, and two sprints later it no longer describes the system. Someone shipped a migration that changed a column. Someone tweaked an endpoint to handle an edge case that got forgotten in the spec. Someone renamed a module. The PRD just sits there, calm, lying. And the worst part is the next feature gets started by reading that PRD as if it were truth. That's how the snowball starts: every new spec inherits errors from the previous one, amplifies them, and the LLM happily generates code on top of fictions.
+
+**The third one is single-reviewer bias.** This was the ugliest one to accept because it implies that I, who have been reviewing code for 15 years, am also not enough. When an LLM writes a spec and then you (or the same LLM) "review it", you fall into the same well as always: you don't see what you already assumed. A security problem a security senior would catch in thirty seconds slips past you because you weren't reading with that hat on. A performance problem a backend with production scars would clock immediately, you miss because you were looking at the UX layer. There's no prompt that fixes this. You need multiple heads looking at the same thing with different instructions.
+
+For months I tried to fix all three problems with more text. "Please verify the files exist." "Please don't invent functions." "Please review as if you were security, then performance, then quality." The model half-obeyed. Sometimes it worked. Sometimes it didn't. It wasn't reproducible. And it wasn't reproducible because the flow wasn't a flow, it was a monologue.
+
+## What started actually working
+
+The moment things changed was dumb. One afternoon I was arguing with a friend about why ADRs (architectural decision records) had aged well in teams where PRDs hadn't. The difference, we landed on, was that ADRs are published as *immutable snapshots*: they document a decision made at a moment, and if the decision changes you write a new ADR that supersedes the old one. You don't edit the old ADR. You leave it there as history.
+
+And I thought: why the hell don't we treat PRDs the same way?
+
+The problem with the traditional PRD is that it tries to be two things at once. On one hand it's an implementation spec (what we're going to build). On the other hand it's trying to be living documentation of the system (what the system does). Those two things age at different speeds. An implementation spec ages instantly: the moment it ships, it's history. Living documentation ages with every deploy. If you put both in the same file, one of them is always wrong.
+
+That's where the first serious rule of the framework came from: **separate the PRD from the SYSTEM_ARTIFACT**.
+
+- PRDs are historical snapshots. They get frozen when they ship. If you want to change something, you write a new PRD that declares `Supersedes: PRD-042` and that's it. You never edit old PRDs. They are history.
+- SYSTEM_ARTIFACT.md is one single file, alive, that describes the current state of the system. A gate forces it to stay updated: you can't promote a PRD from Draft to Implemented without also updating SYSTEM_ARTIFACT with the diff your change introduces.
+
+That separation alone fixed the drift problem. There was no longer a single document trying to be two things.
+
+The second serious rule came a couple of weeks later, when I realized that 80% of the problems slipping past my specs would have been caught by a colleague with a different context than mine. So when the agent finishes a draft of the spec, I fire four reviewers in parallel, each with a distinct prompt and code access:
+
+- A backend reviewer (data models, consistency, transactions, race conditions, migrations)
+- A frontend reviewer (UX, states, accessibility, backend interactions, user-visible error handling)
+- A security reviewer (inputs, authz, secrets, PII, attack surfaces)
+- A quality reviewer (test coverage, acceptance criteria, edge cases, observability)
+
+Each reports with severities 🔴 🟡 🟢. Disagreements are allowed (and encouraged). I read all four reports at once and arbitrate. Not every 🔴 is real, sometimes the reviewers are wrong too, and part of the work is sitting down to decide. But the difference between four angles and one is brutal. The first time I ran this flow the security reviewer caught a token leak in a response body that the other three missed, and the quality reviewer caught an edge case that broke the main acceptance criterion, and neither of those would have come up if I had reviewed alone. I had been reviewing alone for months.
+
+The third rule is the most boring and the most important: **ground in reality**. Before writing a single line of the PRD, the agent has to verify against the repo every reference it's about to make. Every cited file exists. Every function exists. Every endpoint exists. Every env variable exists. And if something doesn't exist, it gets explicitly declared as "to be created" with a proposed location. There are no names floating in the air. Zero.
+
+It sounds obvious and it is obvious. The thing is, an LLM doesn't do this by default. If you don't force it, it'll improvise. And once it improvises, the rest of the spec leans on fictions. You need an explicit grounding step before letting it write anything. Once you put it at the start of the flow, silent hallucination drops so far it feels like you switched models.
+
+The fourth rule is the implementation gate. There is no "spec implemented" by decree. There's "spec implemented" when you can produce three things together:
+
+1. The commit hash where the change lives.
+2. The test results for the relevant tests.
+3. The diff of SYSTEM_ARTIFACT.md describing what changed in the system.
+
+If any of the three is missing, the PRD stays in Draft. And if it stays in Draft, the framework treats the code as if it doesn't exist. It sounds harsh and it's harsh on purpose. It's the only way I found to stop "almost done" from becoming the norm.
+
+## What a real day with this looks like
+
+OK, so you don't think this is all from a manual. A typical day for me with this flow starts like this. I open Claude Code, one single session. I have the five repos mounted as subdirectories inside a shared workspace, plus a sibling `specforge/` directory where the PRDs, ADRs, and SYSTEM_ARTIFACT for each one live.
+
+Let's say today I need to add a new kind of discount to the payments system. Before, I would have opened an editor and started reading `pricing.ts` and asking myself where the change should go. Today I literally do this: I open the project, I tell Claude "let's start a PRD for adding loyalty discounts to checkout", and I let it run the grounding step. The agent reads the repo, identifies `pricing.ts`, `CheckoutService`, the `orders` schema, the `/api/checkout/*` endpoints, and gives me back a list of verified references. If it tries to cite something that doesn't exist, the flow itself blocks it: it can't move past grounding unless every reference is real.
+
+Then comes scoping and planning. I give it domain context (what "loyalty" means in this business, what discount range, who authorizes it) and the agent produces a draft of the PRD. This is where I used to be alone reading. Now I fire the four reviewers in parallel. The backend one digs into the structure of the new `loyalty_discounts` table and proposes a constraint I hadn't asked for. The frontend one points out the checkout UI has no state for "discount not applicable" and that we need to decide how to communicate it. The security one flags the new endpoint in yellow because it doesn't specify authz. The quality one raises a red because the acceptance criteria don't cover "user with expired discount tries to pay".
+
+I read all four reports, I arbitrate (the quality red is real, the security yellow too, the backend one I accept, the frontend one needs a product decision and I leave it marked for tomorrow). The agent updates the PRD. I re-run critique only on the sections that changed (I don't want to re-review the whole document, just the delta). When the four reviewers come back green or green-with-notes, I ship the PRD as Draft.
+
+Now comes implementation. Claude starts writing code. This is where I used to get nervous, review every line, second-guess. Today I literally do something else: I go work on another project. Because the framework guarantees that when I come back, nothing will be marked as Implemented unless there's a commit, passing tests, and a SYSTEM_ARTIFACT diff describing what changed in the system. If any of the three is missing, the PRD stays in Draft and waits for me. There's no way for an agent to slip into "done" on its own.
+
+This is what lets me run five projects in a single session. I'm not reviewing code. I'm reading SYSTEM_ARTIFACT diffs. The diffs are readable. They're short. They tell you exactly what capabilities the system gained or lost. And if any of them feels off, I open the linked PRD and ask for an explanation. But 90% of the time the diff is obvious and I approve in seconds.
+
+## For non-technical people: yes, this is for you too
+
+There's one part of the framework that matters to me especially, and I want to pause here because it isn't decorative. SpecForge is designed so that a non-technical person can use it without writing a single line of code.
+
+This isn't marketing. It's a direct consequence of the design. Think about what falls outside a non-technical person's reach when they try to "build software with AI":
+
+- They don't know how to verify the agent isn't inventing things. SpecForge verifies it for them automatically in the grounding step.
+- They don't know how to review a spec from the angle of security, performance, or data structure. SpecForge fires four parallel reviewers for them and returns severities in red/yellow/green that anyone can read.
+- They don't know how to confirm a change was correctly implemented. SpecForge doesn't let a PRD move to Implemented without commit, tests, and diff. It's a mechanical checklist.
+- They don't know what the current state of the system is. SpecForge maintains one single living file (SYSTEM_ARTIFACT.md) that anyone can open and read in plain English (or whatever language you decide to use, that's up to you in your templates).
+
+What's left for the non-technical person? The only thing that actually adds value in this era: **knowing what they want to exist and why**. Describing intent clearly, making product decisions, arbitrating when reviewers disagree, approving or rejecting changes.
+
+I've seen non-technical founders use SpecForge to ship real MVPs. Not playground demos. Systems with users, with payments, with auth. What they can't do is reach into the code when something breaks, and there they still need an engineer. But the distance between "I have a product idea" and "I have a system running" has shrunk so much that the role of "the person who codes" is no longer the bottleneck. The new bottleneck is "the person who knows what to build and can spot when something is wrong". And that role doesn't need syntax.
+
+I'm not predicting programmers will disappear. I'm saying the perimeter of people who can *produce* software widened enormously, and if you don't give those people process they will produce dangerous garbage. SpecForge is one attempt to give them that process.
+
+## How it compares to what already exists
+
+The spec-driven development space grew enormously in 2025. Before publishing SpecForge I looked seriously at the alternatives, used several of them, and asked myself honestly if it made sense to publish another one. I think it does, because SpecForge addresses a very specific hypothesis the others don't tackle head-on. But here it is side by side so you can decide:
+
+| Axis | **SpecForge** | **Spec Kit** | **Kiro** | **BMAD-Method** |
+|---|---|---|---|---|
+| Form | Templates + workflow + sibling directory | CLI + `/specify` `/plan` `/tasks` commands | Full IDE (VS Code fork) | Multi-agent (agile team in a box) |
+| Focus | PRDs/ADRs grounded against real code | spec → plan → tasks | Requirements / Design / Tasks | Analyst / PM / Dev / Architect agents |
+| Grounding against code | **Mandatory, blocking** | Plan-driven, no enforcement | Spec-first | Doc-first |
+| Multi-reviewer | **4 parallel critics with severities** | Not native | Steering files | Agents collaborating, not critiquing |
+| Draft → Implemented gate | **Hard: commit + tests + SYSTEM_ARTIFACT diff** | Doesn't exist | Implicit in the IDE | Doesn't exist |
+| Living system document | **SYSTEM_ARTIFACT.md** | No | No | No |
+| Works for non-technical users | Yes (by design) | Yes but requires CLI knowledge | Yes inside the IDE | Not really |
+| Entry curve | Low-medium | Low | Medium (IDE switch) | High |
+| Best fit | Coherence + lightweight governance + LLM flows | Getting started fast on any agent | Greenfield inside the IDE | Large enterprise projects |
+
+Some honest observations, no marketing:
+
+- **[GitHub Spec Kit](https://github.com/github/spec-kit)** is probably the best entry point if you've never done spec-driven. It's agent-neutral (works with Claude Code, Cursor, Gemini CLI, Copilot, whatever), has a lot of traction, and the curve is low. I used it for several months. What it lacks is enforcement: you can have a perfect spec and an implementation that doesn't match it and nothing tells you. It also lacks mandatory grounding. Those are exactly the two problems that hurt me most, which is why I ended up building something else.
+
+- **[Kiro](https://kiro.dev)** (from AWS) is the most integrated bet: a whole IDE built around the Requirements → Design → Tasks flow. I tried it on a greenfield. If you're willing to switch IDE and start projects from scratch, it's powerful and the experience is polished. For my case it doesn't fit: I work across five existing codebases from Claude Code and I don't want to switch tools. But if I were starting a new project alone, Kiro would be a serious option.
+
+- **[BMAD-Method](https://github.com/bmadcode/BMAD-METHOD)** is the heaviest and most complete option. It has a team of agents with roles (Analyst, PM, Architect, Dev) that coordinate. It shines on large greenfield projects where the upfront documentation investment pays off. On small teams or fast iteration, agent coordination overhead outweighs the structure it provides. I tried it on a side project and found it excessive. For a 50-engineer company building a large product, it would probably be my first recommendation.
+
+SpecForge doesn't compete with all of these on coverage. It competes on one very specific intuition: **when your only real author is an LLM, the problems aren't about orchestration, they're about grounding and critique**. Spec Kit assumes you'll do the grounding. Kiro wraps you in an IDE but doesn't force you to verify anything. BMAD gives you a team of agents but no hard gate against real code. SpecForge is optimized for one situation: me (or you) working with an agent that writes everything, needing guarantees that nothing slips through.
+
+## What SpecForge does not solve
+
+So this doesn't read like a brochure, here's the uncomfortable part. There are things SpecForge doesn't fix and I'd rather tell you up front than have you find out:
+
+- **It doesn't fix not having clear requirements.** If you don't know what you want, the framework isn't going to guess it. The only thing it does is guarantee that what you described gets implemented faithfully. Garbage in, garbage out, but with process.
+- **It doesn't replace human reviewers in critical domains.** If you're building something regulated (health, finance, security) the four LLM reviewers are a first filter, not the final one. You need humans with context.
+- **It adds friction at the start.** The first two PRDs you write with SpecForge feel slower than doing it by hand. You'll wonder if it's worth it. The return kicks in around the third or fourth PRD, when SYSTEM_ARTIFACT stops being empty and the reviewers have historical context to work with.
+- **It doesn't protect you from picking bad foundational tools.** If your stack is a mess, the framework doesn't tidy it. It tidies how you document and how you ship changes, not the structural coherence of the code.
+- **It's not magic against stupid product decisions.** You can write a perfect PRD, grounded, multi-reviewed, gated implementation, and be building something nobody wants. Mirek Stanek [put it bluntly](https://www.practicalengineering.management/p/career-advice-for-2026): if two-thirds of features don't move the needle, the problem was never "coding too slow" but "building the wrong things".
+
+## When to use it and when not
+
+**Use it if:**
+- Your primary spec author is an LLM and you need guarantees it isn't inventing things.
+- You work across multiple existing codebases and want a portable process, not an IDE.
+- You care about the difference between "what we meant to build" (PRD) and "what the system does right now" (SYSTEM_ARTIFACT).
+- You want lightweight governance without the bureaucracy of a full multi-agent process.
+- You're on a small team (or solo) and need to scale your delivery capacity without hiring.
+
+**Don't use it if:**
+- Your specs are written by a single human who prefers to iterate directly in code.
+- You work pure greenfield and an opinionated IDE like Kiro fits you.
+- You need a team of agents with defined roles coordinating: BMAD is closer to that.
+- You just want to generate a README. SpecForge is more weight than you need.
+
+## The closing I didn't want to write
+
+I've spent a year chewing on a phrase a friend dropped on me when I showed him the early versions of the framework: "you haven't stopped programming, you've just moved what you used to call programming somewhere else". He was right.
+
+I used to program by writing code. Now I program by writing specs verified against the repo, arbitrating parallel critiques, and reading system diffs. The decisions are the same. The taxonomy of problems is the same. What changed is that the mechanical step of turning intent into code came off me. And that detachment, which terrified me at first, turned out to be what freed me to work on five projects at the same time without losing my mind.
+
+The bottleneck moved. I [wrote about this](/blog/builder-manager-engineering-leadership) in the context of the engineering manager role, but it applies to individual devs too: from writing code to understanding, deciding, and validating. My role as a senior didn't disappear, it changed shape. And SpecForge is my attempt to encode that new role into something that doesn't depend on my discipline that day. Because discipline fails. The framework doesn't.
+
+If you've been feeling that your AI-built specs are misaligned from your code, or that your PRDs age badly, or that single-agent critique doesn't catch the real problems, or simply that you trust what the agent gives you a little less every day, try [SpecForge](https://github.com/angelkurten/specforge-framework) and tell me. It's on GitHub, it's open source, it's opinionated on purpose, and that opinion is what let me stop writing code without stopping shipping.
+
+If something doesn't add up, open me an issue and let's argue about it. The alternatives are also good. The important thing isn't that you use SpecForge: the important thing is that you stop writing specs by hand and praying.
