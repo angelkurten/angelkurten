@@ -1,7 +1,7 @@
 ---
 title: "SpecForge: El Framework Que Nacio Despues de Un Año Sin Escribir Codigo"
 date: 2026-04-09
-description: "Llevo 15 años programando, 6 como engineering manager, y el ultimo año no he escrito practicamente codigo. Trabajo desde una sola sesion de Claude Code en cinco proyectos a la vez. SpecForge es el framework que saque a golpes de ese flujo: specs anclados al codigo real, cuatro revisores criticos en paralelo, y un gate duro que impide que un PRD diga una cosa y el sistema haga otra."
+description: "Llevo 15 años programando, 6 como engineering manager, y el ultimo año no he escrito practicamente codigo. Trabajo desde una sola sesion de Claude Code en cinco microservicios a la vez. SpecForge es el framework que saque a golpes de ese flujo: specs anclados al codigo real, cuatro revisores criticos en paralelo, y un gate duro que impide que un PRD diga una cosa y el sistema haga otra."
 tags: [spec-driven-development, ai, llm, claude-code, software-development, framework]
 published: true
 translationSlug: "specforge-spec-driven-framework"
@@ -13,7 +13,7 @@ Tres minutos porque al mirar con calma me di cuenta de que el agente habia inven
 
 Ese domingo fue el principio de lo que hoy se llama SpecForge.
 
-Llevo 15 años escribiendo codigo y 6 manejando equipos. Empece como el tipico senior que se resistia a las herramientas de IA ("esto es un autocompletado glorificado"), pase por la fase de fanboy ("¡esto lo cambia todo!"), y aterrice en un punto raro donde hoy escribo practicamente 0% del codigo que entrego. No es exageracion de LinkedIn. Es literal. Llevo mas de un año trabajando con LLMs de forma intensiva, y los ultimos seis meses los pase casi entero dentro de Claude Code. Trabajo todo el dia desde una sola sesion, y esa sesion va saltando entre cinco proyectos distintos: una plataforma de onboarding, un backend de pagos, una app mobile en Expo, un dashboard interno con Next, y un par de scripts de infra que mantengo por inercia. En ninguno de los cinco he tocado una linea de codigo manualmente en semanas.
+Llevo 15 años escribiendo codigo y 6 manejando equipos. Empece como el tipico senior que se resistia a las herramientas de IA ("esto es un autocompletado glorificado"), pase por la fase de fanboy ("¡esto lo cambia todo!"), y aterrice en un punto raro donde hoy escribo practicamente 0% del codigo que entrego. No es exageracion de LinkedIn. Es literal. Llevo mas de un año trabajando con LLMs de forma intensiva, y los ultimos seis meses los pase casi entero dentro de Claude Code. Trabajo todo el dia desde una sola sesion, y esa sesion va saltando entre cinco microservicios distintos: el de onboarding, el de pagos, el de notificaciones, el de billing, y uno mas chico de reporting que mantengo por inercia. En ninguno de los cinco he tocado una linea de codigo manualmente en semanas.
 
 Si algo en esa frase te suena a hype, aguanta, porque la parte incomoda es otra: esto solo me funciona porque me obligue a seguir un proceso. Y el proceso, despues de romperlo y rehacerlo un monton de veces, se convirtio en algo reproducible que acabo de publicar como framework abierto: [SpecForge](https://github.com/angelkurten/specforge-framework).
 
@@ -81,7 +81,7 @@ Leo los cuatro informes, arbitro (el rojo de quality es real, el amarillo de sec
 
 Ahora viene la implementacion. Claude empieza a escribir codigo. Aqui es donde yo antes me ponia nervioso, revisaba cada linea, dudaba. Hoy hago literalmente otra cosa: me voy a trabajar en otro proyecto. Porque el framework me garantiza que cuando vuelva, nada va a estar marcado como Implemented a menos que haya commit, tests pasando, y un diff del SYSTEM_ARTIFACT que describa que cambio en el sistema. Si falta cualquiera de esos tres, el PRD sigue en Draft y se frena hasta que yo intervenga. No hay manera de que un agente se cuele al estado "terminado" por su cuenta.
 
-Esto es lo que me permite tener cinco proyectos en una sola sesion. Yo no estoy revisando codigo. Yo estoy leyendo diffs del SYSTEM_ARTIFACT. Los diffs son legibles. Son cortos. Te dicen exactamente que capacidades gano o perdio el sistema. Y si alguno me suena raro, abro el PRD al que esta asociado y pido explicaciones. Pero el 90% del tiempo el diff es obvio y lo apruebo en segundos.
+Esto es lo que me permite tener cinco microservicios en una sola sesion. Yo no estoy revisando codigo. Yo estoy leyendo diffs del SYSTEM_ARTIFACT. Los diffs son legibles. Son cortos. Te dicen exactamente que capacidades gano o perdio el sistema. Y si alguno me suena raro, abro el PRD al que esta asociado y pido explicaciones. Pero el 90% del tiempo el diff es obvio y lo apruebo en segundos.
 
 ## Para no-tecnicos: si, esto tambien es para ti
 
@@ -155,7 +155,7 @@ Para que esto no parezca un folleto, aqui va la parte incomoda. Hay cosas que Sp
 
 Llevo un año dando vueltas a una frase que me dijo un amigo cuando le mostre las primeras versiones del framework: "tu no has dejado de programar, lo que has hecho es mover lo que llamabas programar a otro sitio". Tenia razon.
 
-Antes yo programaba escribiendo codigo. Ahora programo escribiendo specs verificados contra el repo, arbitrando criticas paralelas, y leyendo diffs del sistema. Las decisiones son las mismas. La taxonomia de problemas es la misma. Lo que cambio es que el paso mecanico de transformar una intencion en codigo se desprendio de mi. Y ese desprendimiento, que al principio me daba vertigo, resulto ser lo que me libero para trabajar en cinco proyectos a la vez sin volverme loco.
+Antes yo programaba escribiendo codigo. Ahora programo escribiendo specs verificados contra el repo, arbitrando criticas paralelas, y leyendo diffs del SYSTEM_ARTIFACT. Las decisiones son las mismas. La taxonomia de problemas es la misma. Lo que cambio es que el paso mecanico de transformar una intencion en codigo se desprendio de mi. Y ese desprendimiento, que al principio me daba vertigo, resulto ser lo que me libero para trabajar en cinco microservicios a la vez sin volverme loco.
 
 El cuello de botella se movio. Lo [escribi antes](/es/blog/builder-manager-engineering-leadership) a proposito del rol del engineering manager, pero aplica igual a dev individual: de escribir codigo a entender, decidir y validar. Mi rol como senior no desaparecio, cambio de forma. Y SpecForge es mi intento de codificar ese rol nuevo en algo que no dependa de mi disciplina del dia. Porque la disciplina falla. El framework no.
 

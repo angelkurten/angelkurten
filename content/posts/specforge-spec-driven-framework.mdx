@@ -1,7 +1,7 @@
 ---
 title: "SpecForge: The Framework I Built After a Year of Writing Almost No Code"
 date: 2026-04-09
-description: "I've been coding for 15 years, managing engineers for 6, and the last year I've barely touched code. I work from a single Claude Code session across five projects in parallel. SpecForge is the framework I beat out of that workflow: specs grounded against real code, four critical reviewers in parallel, and a hard gate that stops a PRD from saying one thing while the system does another."
+description: "I've been coding for 15 years, managing engineers for 6, and the last year I've barely touched code. I work from a single Claude Code session across five microservices in parallel. SpecForge is the framework I beat out of that workflow: specs grounded against real code, four critical reviewers in parallel, and a hard gate that stops a PRD from saying one thing while the system does another."
 tags: [spec-driven-development, ai, llm, claude-code, software-development, framework]
 published: true
 ---
@@ -12,7 +12,7 @@ Three minutes, because when I actually looked at the diff with calm eyes I notic
 
 That Sunday was the start of what I now call SpecForge.
 
-I've been writing code for 15 years and managing engineering teams for 6. I started as the typical senior who pushed back on AI tooling ("this is glorified autocomplete"), went through my fanboy phase ("this changes everything"), and landed somewhere weird where today I write basically 0% of the code I ship. That's not a LinkedIn exaggeration. It's literal. I've been working with LLMs intensively for over a year, and the last six months I spent almost entirely inside Claude Code. I work all day from a single session, and that session jumps between five different projects: an onboarding platform, a payments backend, a mobile app in Expo, an internal Next dashboard, and a couple of infra scripts I keep maintaining out of inertia. I haven't manually touched a line in any of them in weeks.
+I've been writing code for 15 years and managing engineering teams for 6. I started as the typical senior who pushed back on AI tooling ("this is glorified autocomplete"), went through my fanboy phase ("this changes everything"), and landed somewhere weird where today I write basically 0% of the code I ship. That's not a LinkedIn exaggeration. It's literal. I've been working with LLMs intensively for over a year, and the last six months I spent almost entirely inside Claude Code. I work all day from a single session, and that session jumps between five different microservices: an onboarding service, a payments service, a notifications service, a billing service, and a smaller reporting one I keep maintaining out of inertia. I haven't manually touched a line in any of them in weeks.
 
 If something in that sentence sounds like hype, hold on, because the uncomfortable part is different: this only works for me because I forced myself into a process. And the process, after breaking it and rebuilding it a bunch of times, became something reproducible that I just published as an open framework: [SpecForge](https://github.com/angelkurten/specforge-framework).
 
@@ -80,7 +80,7 @@ I read all four reports, I arbitrate (the quality red is real, the security yell
 
 Now comes implementation. Claude starts writing code. This is where I used to get nervous, review every line, second-guess. Today I literally do something else: I go work on another project. Because the framework guarantees that when I come back, nothing will be marked as Implemented unless there's a commit, passing tests, and a SYSTEM_ARTIFACT diff describing what changed in the system. If any of the three is missing, the PRD stays in Draft and waits for me. There's no way for an agent to slip into "done" on its own.
 
-This is what lets me run five projects in a single session. I'm not reviewing code. I'm reading SYSTEM_ARTIFACT diffs. The diffs are readable. They're short. They tell you exactly what capabilities the system gained or lost. And if any of them feels off, I open the linked PRD and ask for an explanation. But 90% of the time the diff is obvious and I approve in seconds.
+This is what lets me run five microservices in a single session. I'm not reviewing code. I'm reading SYSTEM_ARTIFACT diffs. The diffs are readable. They're short. They tell you exactly what capabilities the system gained or lost. And if any of them feels off, I open the linked PRD and ask for an explanation. But 90% of the time the diff is obvious and I approve in seconds.
 
 ## For non-technical people: yes, this is for you too
 
@@ -154,7 +154,7 @@ So this doesn't read like a brochure, here's the uncomfortable part. There are t
 
 I've spent a year chewing on a phrase a friend dropped on me when I showed him the early versions of the framework: "you haven't stopped programming, you've just moved what you used to call programming somewhere else". He was right.
 
-I used to program by writing code. Now I program by writing specs verified against the repo, arbitrating parallel critiques, and reading system diffs. The decisions are the same. The taxonomy of problems is the same. What changed is that the mechanical step of turning intent into code came off me. And that detachment, which terrified me at first, turned out to be what freed me to work on five projects at the same time without losing my mind.
+I used to program by writing code. Now I program by writing specs verified against the repo, arbitrating parallel critiques, and reading SYSTEM_ARTIFACT diffs. The decisions are the same. The taxonomy of problems is the same. What changed is that the mechanical step of turning intent into code came off me. And that detachment, which terrified me at first, turned out to be what freed me to work on five microservices at the same time without losing my mind.
 
 The bottleneck moved. I [wrote about this](/blog/builder-manager-engineering-leadership) in the context of the engineering manager role, but it applies to individual devs too: from writing code to understanding, deciding, and validating. My role as a senior didn't disappear, it changed shape. And SpecForge is my attempt to encode that new role into something that doesn't depend on my discipline that day. Because discipline fails. The framework doesn't.
 
