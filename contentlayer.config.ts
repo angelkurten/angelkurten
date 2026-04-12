@@ -67,6 +67,9 @@ export const Post = defineDocumentType(() => ({
             url: "https://angelkurten.com",
           },
           url,
+          wordCount: doc.body.raw.split(/\s+/).length,
+          keywords: Array.from(doc.tags as Iterable<string>).join(", "),
+          ...(doc.coverImage ? { image: doc.coverImage } : {}),
         };
       },
     },

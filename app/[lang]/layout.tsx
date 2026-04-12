@@ -3,6 +3,7 @@ import { DM_Serif_Display, Inter } from "next/font/google";
 import { Providers } from "./providers";
 import "../globals.css";
 import { locales, type Locale } from "@/lib/i18n";
+import { siteConfig } from "@/lib/seo";
 import { GoogleTagManagerHead, GoogleTagManagerBody } from "@/components/GoogleTagManager";
 
 const dmSerif = DM_Serif_Display({
@@ -27,15 +28,27 @@ export const metadata: Metadata = {
     template: "%s | Angel Kurten",
   },
   description:
-    "Engineering Leader building scalable distributed systems and AI-driven products. Practical insights on backend architecture, RAG pipelines, and engineering at scale.",
+    "Engineering Leader: 15+ years building distributed systems at scale. Insights on AI architecture, RAG pipelines, microservices, and tech leadership.",
   authors: [{ name: "Angel Kurten" }],
   openGraph: {
     siteName: "Angel Kurten",
     locale: "en_US",
     type: "website",
+    images: [{
+      url: `${siteConfig.url}/api/og?title=${encodeURIComponent("Angel Kurten")}&description=${encodeURIComponent("Engineering Leader building scalable distributed systems and AI-driven products.")}`,
+      width: 1200,
+      height: 630,
+      alt: "Angel Kurten — Scalable Distributed Systems & AI Engineering",
+    }],
   },
   twitter: {
     card: "summary_large_image",
+    images: [{
+      url: `${siteConfig.url}/api/og?title=${encodeURIComponent("Angel Kurten")}&description=${encodeURIComponent("Engineering Leader building scalable distributed systems and AI-driven products.")}`,
+      width: 1200,
+      height: 630,
+      alt: "Angel Kurten — Scalable Distributed Systems & AI Engineering",
+    }],
   },
   robots: {
     index: true,
@@ -73,6 +86,32 @@ export default async function LangLayout({
       <body className="font-sans antialiased">
         <GoogleTagManagerBody />
         <Providers>{children}</Providers>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "Organization",
+              name: "Angel Kurten",
+              url: siteConfig.url,
+              sameAs: [
+                "https://linkedin.com/in/angelkurten",
+                "https://github.com/angelkurten",
+              ],
+            }),
+          }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "WebSite",
+              url: siteConfig.url,
+              name: "Angel Kurten",
+            }),
+          }}
+        />
       </body>
     </html>
   );

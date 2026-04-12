@@ -19,7 +19,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Blog
     "blog.title": "Blog",
     "blog.description":
-      "Thoughts on engineering leadership, system architecture, and building products.",
+      "Deep-dive posts on distributed systems, AI engineering, and leadership. Real production insights from 15+ years building at scale.",
     "blog.noPosts": "No posts found.",
     "blog.search": "Search posts...",
 
@@ -41,6 +41,9 @@ const translations: Record<Locale, Record<string, string>> = {
 
     // Table of contents
     "toc.title": "On this page",
+
+    // Related posts
+    "relatedPosts.title": "Related Posts",
 
     // Not found
     "notFound.title": "Page not found",
@@ -83,7 +86,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Blog
     "blog.title": "Blog",
     "blog.description":
-      "Reflexiones sobre liderazgo en ingeniería, arquitectura de sistemas y construcción de productos.",
+      "Artículos profundos: sistemas distribuidos, ingeniería con IA y liderazgo. Insights reales de 15+ años construyendo a escala.",
     "blog.noPosts": "No se encontraron publicaciones.",
     "blog.search": "Buscar publicaciones...",
 
@@ -105,6 +108,9 @@ const translations: Record<Locale, Record<string, string>> = {
 
     // Table of contents
     "toc.title": "En esta página",
+
+    // Related posts
+    "relatedPosts.title": "Publicaciones Relacionadas",
 
     // Not found
     "notFound.title": "Página no encontrada",

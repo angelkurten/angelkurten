@@ -1,5 +1,6 @@
 import { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { allPosts } from "contentlayer/generated";
 import { useMDXComponent } from "next-contentlayer2/hooks";
 import { Header } from "@/components/layout/Header";
@@ -7,6 +8,7 @@ import { Footer } from "@/components/layout/Footer";
 import { TagBadge } from "@/components/blog/TagBadge";
 import { TableOfContents } from "@/components/blog/TableOfContents";
 import { PostNavigation } from "@/components/blog/PostNavigation";
+import { RelatedPosts } from "@/components/blog/RelatedPosts";
 import { mdxComponents } from "@/components/mdx";
 import {
   getPublishedPosts,
@@ -63,11 +65,23 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       url: `${siteConfig.url}${postUrl}`,
       authors: [siteConfig.author.name],
       locale: lang === "es" ? "es_ES" : "en_US",
+      images: [{
+        url: `${siteConfig.url}/api/og?title=${encodeURIComponent(post.title)}&description=${encodeURIComponent(post.description)}&tags=${encodeURIComponent(post.tags?.join(",") || "")}&readingTime=${encodeURIComponent(post.readingTime || "")}&lang=${lang}`,
+        width: 1200,
+        height: 630,
+        alt: post.title,
+      }],
     },
     twitter: {
       card: "summary_large_image",
       title: post.title,
       description: post.description,
+      images: [{
+        url: `${siteConfig.url}/api/og?title=${encodeURIComponent(post.title)}&description=${encodeURIComponent(post.description)}&tags=${encodeURIComponent(post.tags?.join(",") || "")}&readingTime=${encodeURIComponent(post.readingTime || "")}&lang=${lang}`,
+        width: 1200,
+        height: 630,
+        alt: post.title,
+      }],
     },
     alternates: {
       canonical: canonicalUrl,
@@ -108,9 +122,13 @@ export default async function PostPage({ params }: PageProps) {
         <div className="relative flex gap-12">
           <article className="mx-auto max-w-3xl flex-1 min-w-0">
             <header className="mb-8">
-              <div className="flex items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-500 dark:text-neutral-400">
+                <Link href={getLocalizedPath("/about", lang)} className="transition-colors hover:text-neutral-900 dark:hover:text-neutral-100">
+                  By Angel Kurten
+                </Link>
+                <span aria-hidden="true">&middot;</span>
                 <time dateTime={post.date}>{formatDate(post.date, dateLocale)}</time>
-                <span>·</span>
+                <span aria-hidden="true">&middot;</span>
                 <span>{post.readingTime}</span>
               </div>
               <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl">{post.title}</h1>
@@ -131,6 +149,11 @@ export default async function PostPage({ params }: PageProps) {
               next={next ? { slug: next.slug, title: next.title } : null}
               lang={lang}
             />
+            <RelatedPosts
+              currentSlug={post.slug}
+              currentTags={post.tags}
+              lang={lang}
+            />
           </article>
           <TableOfContents items={toc} lang={lang} />
         </div>
@@ -138,6 +161,35 @@ export default async function PostPage({ params }: PageProps) {
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "BreadcrumbList",
+            itemListElement: [
+              {
+                "@type": "ListItem",
+                position: 1,
+                name: lang === "es" ? "Inicio" : "Home",
+                item: lang === "es" ? `${siteConfig.url}/es` : siteConfig.url,
+              },
+              {
+                "@type": "ListItem",
+                position: 2,
+                name: "Blog",
+                item: lang === "es" ? `${siteConfig.url}/es/blog` : `${siteConfig.url}/blog`,
+              },
+              {
+                "@type": "ListItem",
+                position: 3,
+                name: post.title,
+                item: `${siteConfig.url}${getLocalizedPath(`/blog/${post.slug}`, lang)}`,
+              },
+            ],
+          }),
+        }}
       />
       <Footer lang={lang} />
     </div>

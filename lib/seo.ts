@@ -34,7 +34,18 @@ export function generateBlogPostJsonLd(post: {
     author: {
       "@type": "Person",
       name: siteConfig.author.name,
-      url: siteConfig.url,
+      jobTitle: "Engineering Leader",
+      url: `${siteConfig.url}/about`,
+      sameAs: [
+        "https://linkedin.com/in/angelkurten",
+        "https://github.com/angelkurten",
+      ],
+      knowsAbout: [
+        "Distributed Systems",
+        "AI Engineering",
+        "Backend Architecture",
+        "Engineering Leadership",
+      ],
     },
     publisher: {
       "@type": "Person",
