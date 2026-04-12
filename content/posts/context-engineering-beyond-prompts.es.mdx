@@ -1,0 +1,133 @@
+---
+title: "Context Engineering > Prompt Engineering"
+date: 2026-04-12
+description: "Context engineering reemplaza a prompt engineering. Aprende a diseñar el contexto completo que reciben los LLMs, con patrones de produccion y metricas reales."
+tags: [context-engineering, ai, llm, claude-code, prompt-engineering, software-development]
+published: true
+translationSlug: "context-engineering-beyond-prompts"
+---
+
+El noviembre pasado perdi una tarde entera con un bug que no deberia haber existido. Estaba trabajando dentro de Claude Code, pidiendole al agente que añadiera un webhook handler a nuestro servicio de notificaciones. El prompt era bueno. Se que era bueno porque habia pasado veinte minutos escribiendolo: requisitos claros, ejemplos de handlers existentes en el repo, el schema exacto que llevaria el payload del webhook. Prompt engineering de manual. El tipo de prompt que pondrias en un blog post como buena practica.
+
+El agente escribio el handler. Se veia correcto. Los tests pasaron. Y despues, en staging, cada webhook fallaba en silencio porque el handler importaba un middleware desde un path que existia hace tres meses, antes de que reorganizaramos la capa de auth. El agente no sabia de la reorganizacion. ¿Como iba a saberlo? Nunca se lo dije. Le dije lo que queria. Nunca le dije como era el mundo.
+
+Esa tarde deje de pensar en prompt engineering y empece a pensar en algo para lo que todavia no tenia nombre. Unos meses despues, la industria aterrizo en uno: context engineering.
+
+## El cuello de botella no es como preguntas. Es lo que el modelo ve cuando responde.
+
+Pase la mayor parte de un año convencido de que mejores prompts arreglarian mis flujos con IA. Refine plantillas, añadi descripciones de rol, inclui ejemplos few-shot, experimente con instrucciones de chain-of-thought. Y ayudo. Un poco. De la misma forma que reorganizar las sillas de la cubierta ayuda cuando el problema es la navegacion.
+
+El problema real nunca fue el prompt. El prompt es quiza el 5% de lo que el modelo ve cuando genera una respuesta. El otro 95% es todo lo demas: los archivos que tiene abiertos, los resultados de herramientas que acaba de recibir, las instrucciones del sistema que moldean su comportamiento, el historial de la conversacion, el estado del repositorio en el que esta operando. Ese 95% es el contexto. Y yo estaba gastando toda mi energia de optimizacion en el 5%.
+
+Cuando [escribi sobre SpecForge](/es/blog/specforge-spec-driven-framework) hace unos dias, varias personas me preguntaron por que el paso de grounding importa tanto. Por que obligar al agente a verificar cada referencia de archivo contra el repo real antes de escribir un spec. La respuesta es context engineering, aunque en ese momento no lo llame asi. El paso de grounding no mejora el prompt. Mejora el contexto. Reemplaza el entendimiento alucinado que el modelo tiene del codebase por uno verificado. Mismo prompt, output radicalmente diferente.
+
+Ese es el cambio. Prompt engineering pregunta: "¿Como formulo mi peticion para que el modelo entienda?" Context engineering pregunta: "¿Que necesita el modelo saber, tener acceso a, y recordar para producir la respuesta correcta?" Uno va de escribir. El otro va de diseñar un entorno de informacion.
+
+## Que significa realmente context engineering
+
+Voy a ser especifico, porque el termino se esta diluyendo rapido. Context engineering no es "darle mas informacion al modelo." Volcar todo tu codebase en la ventana de contexto no es context engineering. Eso es context flooding, y empeora las cosas, no las mejora.
+
+Context engineering es el diseño deliberado de cada pieza de informacion que llega al modelo: que se incluye, que se excluye, en que orden, con que estructura, a traves de que mecanismo. Es la diferencia entre darle a alguien un archivero entero y darle un documento informativo.
+
+En la practica, lo pienso en tres capas. No son categorias academicas; son las tres cosas que realmente verifico antes de dejar que un agente toque mi codigo.
+
+### Grounding context: lo que el modelo cree sobre la realidad
+
+Esta es la capa que te mata en silencio. El modelo tiene creencias sobre tu codebase, tu arquitectura, tus dependencias. Esas creencias vienen de lo que haya visto: archivos que abriste, resultados de herramientas, historial de conversacion, sus datos de entrenamiento. Si esas creencias estan mal, todo lo que viene despues esta mal, sin importar que tan perfecto sea tu prompt.
+
+El grounding context se trata de asegurar que las creencias del modelo coincidan con la realidad. En SpecForge, este es el paso obligatorio de grounding: antes de que el agente escriba una sola linea de spec, verifica cada referencia contra el repo real. Cada ruta de archivo. Cada nombre de funcion. Cada endpoint. Si no puede verificar algo, tiene que declararlo como "por crear" con una ubicacion propuesta. Sin referencias flotantes.
+
+Pero el grounding va mas alla de la verificacion del repo. Incluye cosas como: ¿sabe el modelo que version del framework estamos usando? ¿Sabe de la migracion que corrimos la semana pasada que cambio el schema de la base de datos? ¿Sabe que el modulo `auth` se dividio en `auth-core` y `auth-providers` hace dos meses? Si no sabe estas cosas, va a generar codigo que se ve correcto contra un modelo mental desactualizado de tu sistema.
+
+El [pipeline de RAG](/es/blog/practical-rag-pipeline-guide) es un mecanismo para grounding. SYSTEM_ARTIFACT es otro. Ambos sirven para lo mismo: reemplazar las suposiciones del modelo con hechos verificados.
+
+### Tool context: lo que el modelo puede hacer, no solo lo que sabe
+
+Esta es la capa que la mayoria de la gente se salta por completo. Piensan en que informacion tiene el modelo pero no en que capacidades tiene acceso. Y las capacidades moldean el output dramaticamente.
+
+Un agente con acceso a una herramienta de busqueda de archivos va a verificar imports antes de usarlos. Un agente sin esa herramienta va a adivinar. Un agente con acceso a un test runner va a validar su propio output. Un agente sin el te va a decir "los tests deberian pasar" con la misma confianza que usa para todo lo demas.
+
+[Escribi sobre servidores MCP](/es/blog/building-production-mcp-servers) como infraestructura, pero la verdadera intuicion es que MCP es context engineering para capacidades. Cuando configuro a que herramientas puede acceder un agente, no solo le estoy dando funcionalidades. Estoy moldeando que tipo de razonamiento puede hacer. Un agente que puede consultar documentacion va a producir codigo diferente (mejor) que uno que depende de datos de entrenamiento. Un agente que puede ejecutar linters va a detectar violaciones de estilo que un agente sin prompts especificos pasaria por alto.
+
+El tool context tambien incluye restricciones: lo que al modelo no se le permite hacer. Un agente que no puede hacer push a produccion es mas seguro no porque sea menos capaz, sino porque su contexto excluye la posibilidad de acciones catastroficas. Limitar herramientas tambien es context engineering.
+
+### Historical context: lo que el modelo recuerda sobre decisiones pasadas
+
+Esta es la capa que marca la diferencia entre un agente nuevo y uno que realmente trabaja en tu proyecto. Sin historical context, cada interaccion arranca desde cero. El modelo no sabe por que elegiste PostgreSQL en vez de DynamoDB. No sabe del incidente de performance del mes pasado que te hizo añadir caching al servicio de pagos. No sabe que el equipo acordo dejar de usar componentes basados en clases.
+
+En SpecForge, SYSTEM_ARTIFACT sirve como historical context: es un documento vivo que describe lo que el sistema hace ahora mismo, incluyendo la justificacion detras de decisiones clave. Cuando el agente lee SYSTEM_ARTIFACT antes de escribir un nuevo spec, hereda el conocimiento acumulado de cada spec anterior. Sabe que el sistema de descuentos se rediseño en marzo. Sabe que el servicio de notificaciones usa patrones event-driven. Sabe que la API de billing espera timestamps en ISO 8601 porque el equipo tuvo un bug feo con timestamps Unix en febrero.
+
+Session memory, historial de conversacion, ADRs, mensajes de commit, todas son formas de historical context. El error que cometi durante meses fue tratarlas como artefactos de documentacion en vez de lo que realmente son: inputs al proceso de razonamiento del modelo.
+
+## Cinco microservicios, una sesion, cero confusion
+
+Aqui es donde esto deja de ser teoria. Trabajo todo el dia desde una sola sesion de Claude Code que salta entre cinco microservicios: onboarding, pagos, notificaciones, billing y reporting. Hace seis meses, esto era un caos. El agente sangraba contexto de un servicio a otro. Usaba convenciones de nombres del servicio de pagos cuando escribia codigo para notificaciones. Referenciaba tablas de base de datos que existian en billing pero no en onboarding. Mismos prompts, diferente servicio, output incorrecto.
+
+La solucion no fueron mejores prompts. Fue mejor arquitectura de contexto.
+
+Cada servicio tiene su propio SYSTEM_ARTIFACT que se carga cuando cambio de contexto. Cada uno tiene su propio conjunto de referencias verificadas que el agente revisa durante el grounding. Cada uno tiene su propia configuracion de herramientas: el agente del servicio de pagos tiene acceso a la documentacion de la API de Stripe a traves de MCP, el agente del servicio de notificaciones tiene acceso al registro de schemas de eventos, y asi sucesivamente. Cuando digo "añade un mecanismo de reintentos a las notificaciones fallidas," el agente ya sabe como es el pipeline de notificaciones, que estrategias de reintentos hemos usado antes, y cuales son los modos de fallo actuales. No porque se lo dije en el prompt, sino porque el contexto fue diseñado para incluir esa informacion.
+
+El resultado es medible. Lleve registro de las tasas de completado de tareas (definido como "el agente produce codigo que pasa review sin revisiones mayores") a traves de tres fases:
+
+- **Fase 1: Solo prompt engineering.** Buenos prompts, sin contexto estructurado. Tasa de completado: 38%. La mayoria de los fallos eran referencias alucinadas, patrones incorrectos, o codigo que no encajaba en la arquitectura existente.
+- **Fase 2: Prompt engineering + grounding.** Mismos prompts, pero con verificacion obligatoria del repo antes de generar. Tasa de completado: 64%. Los fallos por alucinaciones bajaron aproximadamente un 70%.
+- **Fase 3: Context engineering completo.** Grounding + tool context + historical context via SYSTEM_ARTIFACT. Tasa de completado: 89%. El 11% restante eran mayormente problemas de ambiguedad de producto, no de contexto.
+
+Esos numeros no vienen de un experimento controlado. Vienen de mi propio seguimiento durante seis meses de trabajo real en produccion. Tus numeros van a variar. Pero la direccion no.
+
+## Lo que no funciona
+
+Como llevo suficiente tiempo haciendo esto para tener una coleccion de errores, aqui van los patrones que parecen context engineering pero en realidad empeoran las cosas.
+
+**Context flooding.** Volcar todo en el prompt. "Aqui esta todo el codebase, aqui cada conversacion pasada, aqui toda la documentacion del sitio, ahora escribe una funcion." El modelo se ahoga. La informacion relevante se diluye con informacion irrelevante. He visto tasas de completado bajar cuando le di al modelo *mas* contexto indiscriminadamente. Context engineering tiene tanto que ver con lo que excluyes como con lo que incluyes.
+
+**Contexto estatico en sistemas dinamicos.** Escribir un documento de contexto hermoso una vez y nunca actualizarlo. Este es el problema de decay de PRDs que describi en el [post de SpecForge](/es/blog/specforge-spec-driven-framework). El contexto que no sigue a la realidad se convierte en ficcion que el modelo trata como verdad. Si tu documento de grounding dice que `auth.ts` maneja la autenticacion pero el archivo real ahora es `auth-core/index.ts`, has diseñado una alucinacion en vez de prevenir una.
+
+**Contexto sin verificacion.** Darle al modelo informacion que tu mismo no has verificado. "Aqui esta lo que hace la API" cuando no has revisado la API en dos meses. No estas diseñando contexto; estas diseñando mentiras con buena pinta.
+
+**Sobre-restriccion.** Darle al modelo tantas reglas, guias y restricciones que no puede razonar con flexibilidad. Pase por una fase donde mis system prompts tenian 3,000 palabras de reglas. El modelo seguia las reglas. Tambien dejo de poder resolver problemas que requerian juicio. Context engineering deberia guiar el razonamiento, no reemplazarlo.
+
+## La comparacion que nadie pidio pero todos necesitan
+
+Como la terminologia todavia se esta asentando, asi es como pienso sobre la relacion entre prompt engineering, context engineering y RAG:
+
+| Dimension | Prompt Engineering | Context Engineering | RAG |
+|---|---|---|---|
+| Focus | How you phrase the request | The complete information environment | Retrieval of relevant documents |
+| Scope | The user message | System prompt + tools + memory + repo state + conversation | External knowledge base |
+| Failure mode | Model misunderstands intent | Model operates on wrong assumptions | Model retrieves irrelevant chunks |
+| When it helps | Clear, bounded tasks | Complex, multi-step, multi-context work | Knowledge-heavy domains |
+| Skill ceiling | Medium (diminishing returns fast) | High (compounds over time) | Medium-high (retrieval quality dependent) |
+| Relationship | A subset of context engineering | The whole picture | One mechanism within context engineering |
+
+La intuicion clave: prompt engineering y RAG son ambos *componentes* de context engineering. Prompt engineering diseña la peticion. [RAG](/es/blog/practical-rag-pipeline-guide) diseña una fuente de informacion de grounding. Context engineering diseña el sistema completo. No dejas de hacer prompt engineering cuando empiezas a hacer context engineering. Solo dejas de pretender que es suficiente.
+
+## Como empezar a hacer esto hoy
+
+Si estas leyendo esto y pensando "genial, otro framework que aprender," te entiendo. Aqui va la version minima. Sin framework. Solo tres habitos.
+
+**Primero, audita lo que tu modelo realmente ve.** Antes de tu proxima tarea significativa con IA, para y haz una lista de todo lo que el modelo va a tener acceso cuando genere su respuesta. Instrucciones del sistema, archivos abiertos, acceso a herramientas, historial de conversacion, documentos recuperados. Escribelo. Despues preguntate: ¿es todo lo que necesita? ¿Hay algo aqui que este mal o desactualizado? Te vas a sorprender de la frecuencia con la que la respuesta a ambas preguntas revela el problema.
+
+**Segundo, separa hechos de suposiciones.** Para cada pieza de contexto que el modelo recibe, categoriza: ¿es un hecho verificado (revise que el archivo existe, confirme que el endpoint de la API funciona) o una suposicion (creo que asi funciona el servicio, creo que este patron esta vigente)? Despues verifica las suposiciones sistematicamente. Esto es grounding hecho a mano.
+
+**Tercero, diseña para la sesion, no para el mensaje.** Deja de optimizar prompts individuales y empieza a optimizar la configuracion de la sesion. ¿Que contexto deberia cargarse al inicio de la sesion? ¿Que herramientas deberian estar disponibles? ¿Que memoria deberia persistir entre interacciones? Los primeros cinco minutos de una sesion determinan la calidad de las siguientes cuatro horas. Lo aprendi por las malas cuando me di cuenta de que mis [patrones de agentes rompiendo cosas](/es/blog/ai-agents-breaking-codebases) casi siempre eran causados por una mala inicializacion de sesion, no por malos prompts individuales.
+
+Si quieres la version estructurada, [SpecForge](https://github.com/angelkurten/specforge-framework) es literalmente context engineering codificado en un workflow. El paso de grounding diseña el contexto factual. Los reviewers paralelos diseñan el contexto analitico. SYSTEM_ARTIFACT diseña el historical context. La [configuracion de servidores MCP](/es/blog/building-production-mcp-servers) diseña el tool context. Pero los principios funcionan sin el framework.
+
+## Lo que esto no resuelve
+
+Context engineering no es omnisciencia. Incluso con contexto perfecto, el modelo a veces va a producir output incorrecto. A veces va a ignorar contexto que explicitamente le proporcionaste. A veces va a alucinar a pesar de tener la informacion correcta ahi mismo en su ventana. Estas son limitaciones del modelo, no limitaciones del contexto.
+
+Context engineering tampoco arregla el mal criterio. Si no sabes como se ve la arquitectura correcta, ninguna cantidad de contexto va a hacer que el modelo elija bien. El contexto hace que el modelo sea mejor ejecutando tu intencion. No reemplaza tener buena intencion.
+
+Y context engineering tiene un costo. Mantener documentos SYSTEM_ARTIFACT, configurar acceso a herramientas, verificar referencias de grounding, esto lleva tiempo. Para un script rapido o una tarea puntual, es excesivo. Yo no hago context engineering de mis scripts de Python desechables. Hago context engineering de los sistemas de los que depende mi equipo.
+
+El [post del Headless Monkey](/es/blog/structured-ai-usage-for-developers) fue mi primer intento de articular por que la IA sin estructura produce caos. Context engineering es la respuesta estructural que no tenia entonces. No es la respuesta final. Pero es la mejor que he encontrado hasta ahora, y la diferencia entre mi trabajo antes y despues de adoptarlo es lo suficientemente grande como para que no pueda volver atras.
+
+## La conclusion incomoda
+
+Aqui va lo que mas me costo aceptar: context engineering significa admitir que el modelo no es el cuello de botella. Tu lo eres. El modelo va a trabajar con el contexto que le des. Si le das una imagen fragmentada, desactualizada y sin verificar de tu sistema, va a construir con confianza sobre esa imagen. Si le das una imagen completa, actualizada y verificada, va a producir trabajo que realmente puedes shipear.
+
+La brecha entre un desarrollador que escribe buenos prompts y uno que diseña buen contexto es la misma brecha que solia existir entre un desarrollador que escribia buen codigo y uno que diseñaba buenos sistemas. Es un cambio de nivel de abstraccion. Y como todos esos cambios, lo mas dificil no es aprender la habilidad nueva. Es dejar ir que la vieja era suficiente.
+
+Pase un año volviendome muy bueno en prompt engineering. Fue util. Tambien fue un maximo local. La vista desde context engineering es diferente: mas amplia, mas dificil de navegar, y significativamente mas productiva. Si sigues optimizando prompts y preguntandote por que tu agente sigue sorprendiendote, quiza el prompt no es lo que necesita ingenieria.

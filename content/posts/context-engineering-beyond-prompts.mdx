@@ -1,0 +1,132 @@
+---
+title: "Context Engineering > Prompt Engineering"
+date: 2026-04-12
+description: "Context engineering replaces prompt engineering. Learn to design the full context LLMs receive, with production patterns and real metrics."
+tags: [context-engineering, ai, llm, claude-code, prompt-engineering, software-development]
+published: true
+---
+
+Last November I lost an entire afternoon to a bug that shouldn't have existed. I was working inside Claude Code, asking the agent to add a webhook handler to our notifications service. The prompt was good. I know it was good because I had spent twenty minutes writing it: clear requirements, examples of existing handlers in the repo, the exact schema the webhook payload would carry. Textbook prompt engineering. The kind of prompt you'd put in a blog post as a best practice.
+
+The agent wrote the handler. It looked correct. The tests passed. And then in staging, every webhook silently failed because the handler was importing a middleware from a path that existed three months ago, before we reorganized the auth layer. The agent didn't know about the reorganization. How would it? I never told it. I told it what I wanted. I never told it what the world looked like.
+
+That afternoon I stopped thinking about prompt engineering and started thinking about something I didn't have a name for yet. A few months later, the industry landed on one: context engineering.
+
+## The bottleneck isn't how you ask. It's what the model sees when it answers.
+
+I spent the better part of a year convinced that better prompts would fix my AI workflows. I refined templates, added role descriptions, included few-shot examples, experimented with chain-of-thought instructions. And it helped. A little. The way rearranging deck chairs helps when the issue is navigation.
+
+The real problem was never the prompt. The prompt is maybe 5% of what the model sees when it generates a response. The other 95% is everything else: the files it has open, the tool results it just received, the system instructions shaping its behavior, the history of the conversation, the state of the repository it's operating in. That 95% is the context. And I was spending all my optimization energy on the 5%.
+
+When I [wrote about SpecForge](/blog/specforge-spec-driven-framework) a few days ago, several people asked me why the grounding step matters so much. Why force the agent to verify every file reference against the actual repo before writing a spec? The answer is context engineering, even though I didn't call it that at the time. The grounding step doesn't improve the prompt. It improves the context. It replaces the model's hallucinated understanding of the codebase with a verified one. Same prompt, radically different output.
+
+That's the shift. Prompt engineering asks: "How do I phrase my request so the model understands?" Context engineering asks: "What does the model need to know, have access to, and remember in order to produce the right answer?" One is about writing. The other is about designing an information environment.
+
+## What context engineering actually means
+
+Let me be specific, because the term is getting diluted fast. Context engineering is not "giving the model more information." Dumping your entire codebase into the context window is not context engineering. That's context flooding, and it makes things worse, not better.
+
+Context engineering is the deliberate design of every piece of information that reaches the model: what's included, what's excluded, in what order, with what structure, through what mechanism. It's the difference between handing someone a filing cabinet and handing them a briefing document.
+
+In practice, I think about it in three layers. These aren't academic categories; they're the three things I actually check before letting an agent touch my code.
+
+### Grounding context: what the model believes about reality
+
+This is the layer that kills you silently. The model has beliefs about your codebase, your architecture, your dependencies. Those beliefs come from whatever it has seen: files you opened, tool results, conversation history, its training data. If those beliefs are wrong, everything downstream is wrong, no matter how perfect your prompt is.
+
+Grounding context is about making sure the model's beliefs match reality. In SpecForge, this is the mandatory grounding step: before the agent writes a single line of spec, it verifies every reference against the actual repo. Every file path. Every function name. Every endpoint. If it can't verify something, it has to declare it as "to be created" with a proposed location. No floating references.
+
+But grounding goes beyond repo verification. It includes things like: does the model know what version of the framework we're using? Does it know about the migration we ran last week that changed the database schema? Does it know that the `auth` module was split into `auth-core` and `auth-providers` two months ago? If it doesn't know these things, it will generate code that looks right against an outdated mental model of your system.
+
+The [RAG pipeline](/blog/practical-rag-pipeline-guide) is one mechanism for grounding. SYSTEM_ARTIFACT is another. Both serve the same purpose: replacing the model's assumptions with verified facts.
+
+### Tool context: what the model can do, not just what it knows
+
+This is the layer most people skip entirely. They think about what information the model has but not about what capabilities the model has access to. And capabilities shape output dramatically.
+
+An agent with access to a file search tool will verify imports before using them. An agent without that tool will guess. An agent with access to a test runner will validate its own output. An agent without it will tell you "the tests should pass" with the same confidence it uses for everything else.
+
+I [wrote about MCP servers](/blog/building-production-mcp-servers) as infrastructure, but the real insight is that MCP is context engineering for capabilities. When I configure which tools an agent can access, I'm not just giving it features. I'm shaping what kind of reasoning it can do. An agent that can query documentation will produce different (better) code than one relying on training data. An agent that can run linters will catch style violations that a promptless agent would miss.
+
+The tool context also includes constraints: what the model is not allowed to do. An agent that can't push to production is safer not because it's less capable, but because its context excludes the possibility of catastrophic actions. Limiting tools is context engineering too.
+
+### Historical context: what the model remembers about past decisions
+
+This is the layer that makes the difference between a fresh agent and one that actually works on your project. Without historical context, every interaction starts from zero. The model doesn't know why you chose PostgreSQL over DynamoDB. It doesn't know about the performance incident last month that made you add caching to the payments service. It doesn't know that the team agreed to stop using class-based components.
+
+In SpecForge, SYSTEM_ARTIFACT serves as historical context: it's a living document that describes what the system does right now, including the rationale behind key decisions. When the agent reads SYSTEM_ARTIFACT before writing a new spec, it inherits the accumulated knowledge of every previous spec. It knows the discount system was redesigned in March. It knows the notifications service uses event-driven patterns. It knows the billing API expects ISO 8601 timestamps because the team had a nasty bug with Unix timestamps in February.
+
+Session memory, conversation history, ADRs, commit messages, these are all forms of historical context. The mistake I made for months was treating them as documentation artifacts instead of what they actually are: inputs to the model's reasoning process.
+
+## Five microservices, one session, zero confusion
+
+Here's where this stops being theory. I work all day from a single Claude Code session that jumps between five microservices: onboarding, payments, notifications, billing, and reporting. Six months ago, this was chaos. The agent would bleed context from one service into another. It would use naming conventions from the payments service when writing code for notifications. It would reference database tables that existed in billing but not in onboarding. Same prompts, different service, wrong output.
+
+The fix wasn't better prompts. It was better context architecture.
+
+Each service has its own SYSTEM_ARTIFACT that gets loaded when I switch context. Each has its own set of verified references that the agent checks during grounding. Each has its own tool configuration: the payments service agent has access to Stripe's API docs through MCP, the notifications service agent has access to the event schema registry, and so on. When I say "add a retry mechanism to failed notifications," the agent already knows what the notification pipeline looks like, what retry strategies we've used before, and what the current failure modes are. Not because I told it in the prompt, but because the context was engineered to include that information.
+
+The result is measurable. I tracked task completion rates (defined as "agent produces code that passes review without major revisions") across three phases:
+
+- **Phase 1: Prompt engineering only.** Good prompts, no structured context. Task completion rate: 38%. Most failures were hallucinated references, wrong patterns, or code that didn't fit the existing architecture.
+- **Phase 2: Prompt engineering + grounding.** Same prompts, but with mandatory repo verification before generation. Task completion rate: 64%. Hallucination-related failures dropped by roughly 70%.
+- **Phase 3: Full context engineering.** Grounding + tool context + historical context via SYSTEM_ARTIFACT. Task completion rate: 89%. The remaining 11% were mostly product ambiguity issues, not context issues.
+
+Those numbers aren't from a controlled experiment. They're from my own tracking over six months across real production work. Your numbers will vary. But the direction won't.
+
+## What doesn't work
+
+Since I've been doing this long enough to have a collection of mistakes, here are the patterns that look like context engineering but actually make things worse.
+
+**Context flooding.** Dumping everything into the prompt. "Here's the entire codebase, here's every past conversation, here's the full documentation site, now write a function." The model drowns. Relevant information gets diluted by irrelevant information. I've seen task completion rates drop when I gave the model *more* context indiscriminately. Context engineering is as much about what you exclude as what you include.
+
+**Static context in dynamic systems.** Writing a beautiful context document once and never updating it. This is the PRD decay problem I described in the [SpecForge post](/blog/specforge-spec-driven-framework). Context that doesn't track reality becomes fiction the model treats as truth. If your grounding document says `auth.ts` handles authentication but the actual file is now `auth-core/index.ts`, you've engineered a hallucination instead of preventing one.
+
+**Context without verification.** Feeding the model information you haven't verified yourself. "Here's what the API does" when you haven't actually checked the API in two months. You're not engineering context; you're engineering plausible-sounding lies.
+
+**Over-constraining.** Giving the model so many rules, guidelines, and constraints that it can't reason flexibly. I went through a phase where my system prompts were 3,000 words of rules. The model followed the rules. It also stopped being able to solve problems that required judgment. Context engineering should guide reasoning, not replace it.
+
+## The comparison nobody asked for but everyone needs
+
+Since the terminology is still settling, here's how I think about the relationship between prompt engineering, context engineering, and RAG:
+
+| Dimension | Prompt Engineering | Context Engineering | RAG |
+|---|---|---|---|
+| Focus | How you phrase the request | The complete information environment | Retrieval of relevant documents |
+| Scope | The user message | System prompt + tools + memory + repo state + conversation | External knowledge base |
+| Failure mode | Model misunderstands intent | Model operates on wrong assumptions | Model retrieves irrelevant chunks |
+| When it helps | Clear, bounded tasks | Complex, multi-step, multi-context work | Knowledge-heavy domains |
+| Skill ceiling | Medium (diminishing returns fast) | High (compounds over time) | Medium-high (retrieval quality dependent) |
+| Relationship | A subset of context engineering | The whole picture | One mechanism within context engineering |
+
+The key insight: prompt engineering and RAG are both *components* of context engineering. Prompt engineering designs the request. [RAG](/blog/practical-rag-pipeline-guide) designs one source of grounding information. Context engineering designs the entire system. You don't stop doing prompt engineering when you start doing context engineering. You just stop pretending it's sufficient.
+
+## How to start doing this today
+
+If you're reading this and thinking "great, another framework to learn," I get it. Here's the minimal version. No framework required. Just three habits.
+
+**First, audit what your model actually sees.** Before your next significant AI task, pause and list everything the model will have access to when it generates its response. System instructions, open files, tool access, conversation history, retrieved documents. Write it down. Then ask yourself: is this everything it needs? Is there anything here that's wrong or outdated? You'll be surprised how often the answer to both questions reveals the problem.
+
+**Second, separate facts from assumptions.** For every piece of context the model receives, categorize it: is this a verified fact (I checked the file exists, I confirmed the API endpoint works) or an assumption (I think this is how the service works, I believe this pattern is current)? Then systematically verify the assumptions. This is what grounding is, done manually.
+
+**Third, design for the session, not the message.** Stop optimizing individual prompts and start optimizing the session setup. What context should be loaded at the start of the session? What tools should be available? What memory should persist between interactions? The first five minutes of a session determine the quality of the next four hours. I learned this the hard way when I realized my [agent breaking patterns](/blog/ai-agents-breaking-codebases) were almost always caused by poor session initialization, not poor individual prompts.
+
+If you want the structured version, [SpecForge](https://github.com/angelkurten/specforge-framework) is literally context engineering encoded into a workflow. The grounding step engineers the factual context. The parallel reviewers engineer the analytical context. SYSTEM_ARTIFACT engineers the historical context. The [MCP server configuration](/blog/building-production-mcp-servers) engineers the tool context. But the principles work without the framework.
+
+## What this doesn't solve
+
+Context engineering is not omniscience. Even with perfect context, the model will sometimes produce wrong output. It will sometimes ignore context you explicitly provided. It will sometimes hallucinate despite having the correct information right there in its window. These are model limitations, not context limitations.
+
+Context engineering also doesn't fix bad judgment. If you don't know what the right architecture looks like, no amount of context will make the model choose correctly. Context makes the model better at executing your intent. It doesn't replace having good intent.
+
+And context engineering has a cost. Maintaining SYSTEM_ARTIFACT documents, configuring tool access, verifying grounding references, this takes time. For a quick script or a one-off task, it's overkill. I don't context-engineer my throwaway Python scripts. I context-engineer the systems that my team depends on.
+
+The [Headless Monkey post](/blog/structured-ai-usage-for-developers) was my first attempt at articulating why AI without structure produces chaos. Context engineering is the structural answer I didn't have then. It's not the final answer. But it's the best one I've found so far, and the difference between my work before and after adopting it is large enough that I can't go back.
+
+## The uncomfortable conclusion
+
+Here's the thing that took me the longest to accept: context engineering means admitting that the model isn't the bottleneck. You are. The model will work with whatever context you give it. If you give it a fragmented, outdated, unverified picture of your system, it will confidently build on that picture. If you give it a complete, current, verified picture, it will produce work you can actually ship.
+
+The gap between a developer who writes great prompts and one who engineers great context is the same gap that used to exist between a developer who wrote great code and one who designed great systems. It's a level-of-abstraction shift. And like all such shifts, the hardest part isn't learning the new skill. It's letting go of the old one being sufficient.
+
+I spent a year getting really good at prompt engineering. It was useful. It was also a local maximum. The view from context engineering is different: wider, harder to navigate, and significantly more productive. If you're still optimizing prompts and wondering why your agent keeps surprising you, maybe the prompt isn't what needs engineering.

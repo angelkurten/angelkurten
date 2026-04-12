@@ -1,0 +1,151 @@
+---
+title: "4 Agents, 1 Spec: Multi-Agent Orchestration That Works"
+date: 2026-04-12
+description: "Multi-agent systems fail when agents do different tasks. They work when agents look at the same thing from different angles. Patterns from production."
+tags: [multi-agent, ai, llm, claude-code, mcp, distributed-systems, software-development]
+published: true
+---
+
+The first time the security reviewer caught something, I almost dismissed it. I had been running my [SpecForge](/blog/specforge-spec-driven-framework) flow for about two weeks, four parallel reviewers critiquing the same spec, and I was still in the phase where I treated the reviewer outputs like nice-to-have suggestions. Background noise with severity labels.
+
+The spec was for a new webhook endpoint in our payments service. Simple stuff: receive event from Stripe, validate signature, update order status, return 200. I had written the PRD, grounded it against the repo, and was about to skip the multi-review step because it was a small feature and I was in a hurry. But I ran it anyway out of habit. The backend reviewer came back clean. The frontend reviewer had nothing relevant. The quality reviewer flagged a missing edge case around duplicate events, yellow severity, reasonable. And then the security reviewer came back with a red: the proposed error response included the raw webhook payload in the error body for debugging purposes, which meant that on signature validation failure, the endpoint would leak the full Stripe event including customer payment tokens to whatever was on the other end.
+
+Three reviewers missed it. I would have missed it. I had been reviewing specs alone for months and I would have shipped that endpoint with a token leak in the error path, because I was reading the spec with my "does this make sense architecturally" hat, not my "what happens when this fails and who sees the output" hat.
+
+That was the moment I stopped thinking about multi-agent as a convenience and started thinking about it as infrastructure.
+
+## The problem with one brain looking at one thing
+
+The AI industry has a multi-agent obsession right now, and most of it is pointed in the wrong direction. The dominant narrative goes like this: you have Agent A that does research, Agent B that writes code, Agent C that tests it, and Agent D that deploys it. A pipeline. An assembly line. Autonomous agents doing autonomous things in sequence.
+
+I have tried this. Multiple times. It does not work in production. Not because the individual agents are bad, but because the architecture assumes that the hard part is dividing labor, when the hard part is actually dividing perspective.
+
+When you give Agent A the research task and Agent B the coding task, each agent only sees its own slice. Agent A doesn't know what Agent B will struggle with. Agent B doesn't know what Agent A assumed. The context boundary between them is a lossy compression layer, and every lossy compression layer in a pipeline compounds. By the time Agent D tries to deploy, the accumulated drift between what was intended and what was built is significant enough to break things in ways nobody anticipated.
+
+I documented this in my post on [AI agents breaking codebases](/blog/ai-agents-breaking-codebases): 75% of agents break previously working code during maintenance cycles. That number isn't about agent capability. It's about agent isolation. One agent, one perspective, one set of assumptions, one blind spot that becomes a production incident.
+
+The pattern that works is different, and it's embarrassingly simple: don't divide the labor. Divide the perspective. Take the same artifact, the same spec, the same piece of work, and make multiple agents look at it from deliberately different angles. Not sequentially. In parallel. Each with a prompt that forces a specific expertise lens.
+
+## How the system actually works
+
+My production setup, which I described in the [SpecForge post](/blog/specforge-spec-driven-framework), uses four parallel reviewers. Each gets the exact same spec. Each gets the exact same codebase access. The only thing that differs is the system prompt that tells them what to care about.
+
+The backend reviewer gets instructions to focus on data models, consistency, transactions, race conditions, migrations, and API contract compliance. It reads the spec through the lens of "will this work correctly under concurrent load and will the data model age well."
+
+The frontend reviewer focuses on UX flows, UI states, accessibility, error presentation, and how the backend contract surfaces to users. It reads the spec through the lens of "what will the user actually experience, including when things go wrong."
+
+The security reviewer focuses on input validation, authorization boundaries, secret exposure, PII handling, and attack surface analysis. It reads the spec through the lens of "how would I break this, and what's the blast radius."
+
+The quality reviewer focuses on test coverage, acceptance criteria completeness, edge cases, observability, and whether the spec is actually testable as written. It reads the spec through the lens of "can I verify this works, and what scenarios are missing."
+
+They all run in parallel. They all return structured reports with severity ratings. And then I sit down and read all four reports together, because the interesting part is never what one reviewer says in isolation. It's where they disagree.
+
+## What each reviewer catches that others miss
+
+After running this system on roughly 60 specs across five microservices over the past four months, I have enough data to see patterns. Here's what the numbers actually look like.
+
+The backend reviewer has a catch rate of about 72% for data model issues and a false positive rate of around 15%. It consistently finds things like missing indexes on query patterns, transaction boundaries that don't match the business operation, and migration sequences that would cause downtime. What it misses: anything that requires understanding the user's mental model. It will approve a perfectly consistent API that is completely unusable from the frontend.
+
+The frontend reviewer catches UX gaps at about 65% and has the highest false positive rate at roughly 23%. It flags missing loading states, error messages that expose internal details, and accessibility violations. The false positives tend to be cases where it suggests UI patterns that don't match our design system. What it misses: anything below the API layer. It will approve a beautifully described user flow that relies on a database query that will timeout at scale.
+
+The security reviewer has the lowest catch rate at about 45% but the lowest false positive rate at 8%, and when it catches something it's almost always real and almost always something the other three missed entirely. Token leaks, overly broad authorization scopes, PII in logs, IDOR vulnerabilities in new endpoints. The low catch rate is because most specs don't have security issues. When they do, this reviewer earns its cost in seconds.
+
+The quality reviewer catches about 58% of testability and edge case gaps with a 12% false positive rate. It finds missing acceptance criteria, untestable requirements, edge cases that aren't covered, and observability gaps. Its most valuable contribution is the negative: "this spec describes what should happen but never describes what should happen when the payment provider is down."
+
+Combined, the four reviewers catch roughly 89% of issues that would have become bugs or incidents. Running a single reviewer, any single reviewer, catches between 45% and 72% depending on the domain. The delta between one reviewer and four is not additive. It's multiplicative. Because each reviewer's blind spot is another reviewer's primary focus.
+
+## The arbitration problem
+
+Here's where the industry narrative breaks down completely. Every multi-agent framework tells you the agents can "collaborate" and "reach consensus." In practice, agents reaching consensus means agents averaging their opinions, and averaged opinions are useless.
+
+When the security reviewer says a new endpoint needs rate limiting and the backend reviewer says rate limiting adds latency that violates the performance SLA, there is no algorithmic resolution. That's a product decision. A human has to sit down, understand both concerns, and decide: do we accept the latency or do we accept the risk? And that decision depends on context that no agent has: how critical is this endpoint, what's our current threat model, do we have a WAF that handles this already, is this a public or internal API.
+
+I tried automating the arbitration. I really did. I built a fifth agent whose job was to read the four reports and produce a synthesized recommendation. The result was a diplomatic document that agreed with everyone and recommended everything. It was the worst kind of consensus: the kind that adds scope instead of making decisions.
+
+The pattern that works: a human reads all four reports, marks each finding as "accept", "reject", or "defer", and adds a one-line rationale. It takes me about 15 minutes per spec. That's the real cost of multi-agent orchestration, and it's the part nobody wants to talk about because it doesn't fit the "autonomous agents" marketing.
+
+## MCP as the coordination layer
+
+The reason this works at all as a coherent system is MCP. Each reviewer is a Claude Code session with access to the same set of [MCP servers](/blog/building-production-mcp-servers) that provide the tools they need: file system access to the repo, a search server for codebase navigation, and the SpecForge tooling that manages PRD state and SYSTEM_ARTIFACT access.
+
+MCP provides the shared infrastructure layer. The reviewers don't need to coordinate with each other. They don't share state. They don't pass messages between themselves. They each independently connect to the same tool servers, read the same codebase, and produce their reports. The coordination happens through the artifact they're all reviewing, not through inter-agent communication.
+
+This is a critical architectural choice. Inter-agent communication is where multi-agent systems go to die. The moment Agent A sends a message to Agent B asking for clarification, you have a distributed system with all the problems I described in my [post on building scalable systems](/blog/building-scalable-systems): partial failures, message ordering, state inconsistency, and cascading timeouts. And you have those problems in a system where the "messages" are natural language, which means the failure modes aren't even deterministic.
+
+Shared infrastructure, independent execution, human arbitration. That's the pattern. It's not glamorous. It maps directly to how code review works in healthy engineering teams: multiple reviewers, same PR, different expertise, author makes the final call. We solved this coordination problem for humans decades ago. The agent version is the same pattern with different participants.
+
+## Distributed systems patterns that apply
+
+If you squint, the four-reviewer system is a read-only consensus protocol. Each reviewer is a replica that processes the same input independently. The "consensus" is manual: I read the outputs and decide. But the distributed systems patterns are surprisingly applicable.
+
+**Independent replicas over leader election.** The reviewers don't elect a leader. There's no primary reviewer whose opinion overrides the others. Each runs independently with its own prompt and produces its own output. This eliminates the single point of failure that leader-based architectures introduce. If the security reviewer times out, the other three still produce useful output.
+
+**Eventual consistency over strong consistency.** The reviews don't need to agree. In fact, disagreement is signal. When the backend reviewer says "this migration is safe" and the quality reviewer says "this migration has no rollback plan," both are correct from their perspective. The inconsistency is the valuable part. Forcing them to agree would destroy information.
+
+**Conflict resolution at the edge.** In distributed systems, conflict resolution happens at the point closest to the user. In multi-agent review, conflict resolution happens with the human who has the product context. The reviewers provide evidence. The human resolves conflicts. Trying to automate conflict resolution is the agent equivalent of trying to merge conflicting writes automatically: sometimes you can, but the cases where you can't are the ones that matter.
+
+**Idempotent operations.** Each review is idempotent. I can rerun any reviewer on the same spec and get the same class of output (not identical, because LLMs aren't deterministic, but the same severity and category of findings). This means I can selectively rerun reviewers on updated sections without re-reviewing the entire spec.
+
+## Common multi-agent anti-patterns
+
+After a year of experimenting with different multi-agent configurations, I have a decent catalog of what doesn't work.
+
+**Agent-to-agent delegation chains.** Agent A decides it needs more information and asks Agent B, which asks Agent C, which asks Agent D. By the time the answer comes back, it's been through three layers of natural language compression and the original question is unrecognizable. I've seen chains where the final answer was technically correct but addressed a question nobody asked, because each handoff subtly reframed the problem.
+
+**Unsupervised improvement loops.** Agent writes code, test agent runs tests, test agent reports failures, code agent fixes them, repeat. This sounds like CI/CD but it's actually an infinite loop with no convergence guarantee. I've watched loops where the code agent fixes Test A by breaking Test B, then fixes Test B by breaking Test A, oscillating indefinitely. Without a human circuit breaker, these loops consume tokens proportional to the agent's inability to solve the underlying problem.
+
+**Context bleeding.** Multiple agents sharing the same conversation context and stepping on each other's state. Agent A sets up a mental model, Agent B overwrites it with a different one, Agent A's next response is incoherent because its context was polluted. This is the multi-agent equivalent of shared mutable state, and the solution is the same: don't share mutable state. Give each agent its own context. Coordinate through shared immutable artifacts, not shared conversation.
+
+**The generalist fallback.** When a specialized reviewer encounters something outside its domain, it gives a generic opinion instead of saying "this is outside my scope." The security reviewer commenting on UX patterns. The frontend reviewer opining on database indexes. These out-of-domain opinions have the highest false positive rate and the lowest signal value. Good reviewer prompts explicitly tell the agent what to ignore.
+
+## The economics: when to pay for four brains
+
+Multi-agent is not free. Four parallel reviews of a typical spec cost roughly $2-4 in tokens. A single-agent review costs $0.40-0.80. Over a month of active development across five services, I spend approximately $180-250 on multi-agent reviews.
+
+When it's worth it: any spec that touches authentication, payments, PII, or multi-service boundaries. Any spec where the blast radius of a bug is customer-facing. Any spec for a new endpoint or a new data model. For these, the $2-4 per review is trivial compared to the cost of a production incident.
+
+When single-agent is fine: internal tooling changes, documentation updates, configuration tweaks, minor UI adjustments. Anything where the blast radius is small and the domain is narrow. For these, one reviewer with the right prompt catches enough.
+
+My rule of thumb: if I would ask a colleague to review this PR, I run multi-agent review on the spec. If I would self-merge this PR, single-agent or no review is fine.
+
+## How the approaches compare
+
+| Aspect | **SpecForge Reviewers** | **CrewAI** | **LangGraph** | **AutoGen** | **Claude Managed Agents** |
+|---|---|---|---|---|---|
+| Paradigm | Parallel critics, same artifact | Role-based agent teams | Graph-based state machines | Conversational agent groups | Tool-use sub-agents |
+| Coordination | Human arbitration | Sequential/hierarchical | Explicit graph edges | Chat-based negotiation | Parent agent orchestrates |
+| Inter-agent communication | None (by design) | Task handoffs | State transitions | Group chat messages | Tool call results |
+| Best for | Spec review, quality gates | Multi-step workflows | Complex branching logic | Research, brainstorming | Scoped tool delegation |
+| Worst for | Code generation, execution | Critique/review tasks | Simple linear flows | Deterministic workflows | Open-ended exploration |
+| Production readiness | Battle-tested (my usage) | Maturing, active community | Solid, backed by LangChain | Research-oriented | Early but promising |
+| Token efficiency | 4x single agent (fixed) | Variable, can spiral | Predictable per node | Unpredictable (chat loops) | 1.5-3x single agent |
+| Human-in-the-loop | Required (the point) | Optional, often skipped | Configurable breakpoints | Possible but awkward | Natural via parent |
+| Failure mode | Missed findings (manageable) | Chain failures cascade | State corruption | Infinite loops | Context overflow |
+
+The honest assessment: most of these frameworks are solving different problems. CrewAI and AutoGen are designed for agents that do different tasks and coordinate. LangGraph is a workflow engine that happens to support agents. Claude Managed Agents is a delegation pattern for breaking large tasks into smaller ones. SpecForge reviewers are specifically about multiple perspectives on the same artifact. Comparing them directly is a bit like comparing a code review tool with a CI/CD pipeline. They're complementary, not competitive.
+
+## What this doesn't solve
+
+Multi-agent review is a filter, not a guarantee. Here's what it doesn't do.
+
+It doesn't catch bugs that only manifest at runtime. Four reviewers reading a spec can catch logical errors, missing edge cases, and architectural problems. They cannot catch that your specific version of PostgreSQL handles a specific JOIN differently under high concurrency. Static review, even multi-perspective static review, has the same limitations it has always had.
+
+It doesn't replace domain expertise the reviewers weren't prompted for. If your spec has a compliance issue that requires knowing HIPAA regulations, and none of your reviewers were prompted with HIPAA knowledge, they won't catch it. The quality of the output is bounded by the quality of the reviewer prompts. Garbage prompts, garbage reviews.
+
+It doesn't scale linearly. Going from 4 reviewers to 8 does not double the catch rate. I tried 6 reviewers (adding a "performance" and "DevOps" reviewer) and the marginal improvement was minimal while the arbitration time nearly doubled. Four seems to be the sweet spot for the kind of full-stack work I do. Your mileage will vary based on your domain complexity.
+
+It doesn't fix bad specs. If the input spec is vague, contradictory, or wrong, four reviewers will produce four detailed reports about a bad spec. They'll catch internal inconsistencies, but they can't tell you that your product requirements are wrong. That's still a human problem.
+
+And it doesn't make [deliberate AI usage](/blog/structured-ai-usage-for-developers) optional. Running multi-agent without understanding what you're reviewing and why is just burning tokens with extra steps. The human in the loop has to actually loop. Reading four reports and clicking "accept all" defeats the entire purpose.
+
+## The uncomfortable conclusion
+
+The multi-agent pattern that works in production is boring. It's not autonomous agents collaborating in a digital workspace. It's four isolated processes reading the same document with different instructions, producing reports, and a human making decisions. It's code review. It's the same thing engineering teams have done for thirty years, with LLMs instead of colleagues.
+
+The reason it works is the same reason code review works: no single perspective is sufficient for complex systems. The reason most multi-agent architectures fail is the same reason design-by-committee fails: removing the human decision-maker doesn't make decisions faster, it makes decisions worse.
+
+I spent months trying to build the autonomous version. The version where agents talk to each other, reach consensus, and produce a final output without human intervention. It doesn't work. Not because the technology isn't ready, but because the problem is fundamentally one that requires judgment, and judgment requires accountability, and accountability requires a human who will get paged at 3 AM if the decision was wrong.
+
+If you're building multi-agent systems, start with the boring version. Same artifact, multiple perspectives, human arbitration. Get that working. Measure the catch rate. Understand the false positive rate. Learn which reviewer prompts produce signal and which produce noise. Then, if you want, try automating the arbitration. You'll understand why I stopped trying.
+
+The framework is open source at [SpecForge](https://github.com/angelkurten/specforge-framework). The four reviewer prompts are in the repository. Try them on your next spec and count how many findings you would have missed alone. For me, that count was high enough to make the whole thing non-optional.

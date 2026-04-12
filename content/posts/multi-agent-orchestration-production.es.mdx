@@ -1,0 +1,152 @@
+---
+title: "4 Agentes, 1 Spec: Orquestacion Multi-Agente Que Funciona"
+date: 2026-04-12
+description: "Los sistemas multi-agente fallan cuando los agentes hacen tareas distintas. Funcionan cuando miran lo mismo desde angulos diferentes. Patrones desde produccion."
+tags: [multi-agent, ai, llm, claude-code, mcp, distributed-systems, software-development]
+published: true
+translationSlug: "multi-agent-orchestration-production"
+---
+
+La primera vez que el reviewer de seguridad pillo algo, casi lo descarte. Llevaba unas dos semanas corriendo mi flujo de [SpecForge](/es/blog/specforge-spec-driven-framework), cuatro revisores en paralelo criticando el mismo spec, y todavia estaba en la fase donde trataba los outputs de los revisores como sugerencias de cortesia. Ruido de fondo con etiquetas de severidad.
+
+El spec era para un nuevo endpoint de webhooks en nuestro servicio de pagos. Algo sencillo: recibir evento de Stripe, validar firma, actualizar estado del pedido, devolver 200. Habia escrito el PRD, lo habia anclado contra el repo, y estaba a punto de saltarme el paso de multi-review porque era una feature pequeña y tenia prisa. Pero lo lance de todos modos por costumbre. El reviewer de backend salio limpio. El de frontend no tenia nada relevante. El de quality marco un edge case sobre eventos duplicados que faltaba, severidad amarilla, razonable. Y entonces el reviewer de seguridad volvio con un rojo: la respuesta de error propuesta incluia el payload crudo del webhook en el body del error para depuracion, lo que significaba que ante un fallo de validacion de firma, el endpoint filtraria el evento completo de Stripe incluyendo tokens de pago del cliente a lo que estuviera al otro lado.
+
+Tres revisores no lo vieron. Yo tampoco lo habria visto. Llevaba meses revisando specs solo y habria desplegado ese endpoint con un leak de tokens en el path de error, porque estaba leyendo el spec con mi gorro de "tiene sentido arquitectonicamente" y no con el de "que pasa cuando esto falla y quien ve el output".
+
+Ese fue el momento en que deje de pensar en multi-agente como una comodidad y empece a pensarlo como infraestructura.
+
+## El problema de un solo cerebro mirando una cosa
+
+La industria de IA tiene una obsesion con multi-agente ahora mismo, y la mayoria va apuntada en la direccion equivocada. La narrativa dominante dice mas o menos esto: tienes al Agente A que investiga, al Agente B que escribe codigo, al Agente C que lo testea, y al Agente D que lo despliega. Un pipeline. Una linea de montaje. Agentes autonomos haciendo cosas autonomas en secuencia.
+
+Lo he intentado. Varias veces. No funciona en produccion. No porque los agentes individuales sean malos, sino porque la arquitectura asume que lo dificil es dividir el trabajo, cuando lo dificil es en realidad dividir la perspectiva.
+
+Cuando le das al Agente A la tarea de investigacion y al Agente B la de codigo, cada agente solo ve su propio trozo. El Agente A no sabe con que va a pelear el Agente B. El Agente B no sabe que asumio el Agente A. La frontera de contexto entre ellos es una capa de compresion con perdida, y cada capa de compresion con perdida en un pipeline se acumula. Para cuando el Agente D intenta desplegar, la deriva acumulada entre lo que se pretendia y lo que se construyo es suficiente para romper cosas de formas que nadie anticipo.
+
+Lo documente en mi post sobre [agentes de IA rompiendo codebases](/es/blog/ai-agents-breaking-codebases): el 75% de los agentes rompen codigo que antes funcionaba durante ciclos de mantenimiento. Ese numero no habla de la capacidad del agente. Habla de su aislamiento. Un agente, una perspectiva, un conjunto de suposiciones, un punto ciego que se convierte en un incidente en produccion.
+
+El patron que funciona es diferente, y es vergonzosamente simple: no dividas el trabajo. Divide la perspectiva. Toma el mismo artefacto, el mismo spec, la misma pieza de trabajo, y haz que multiples agentes lo miren desde angulos deliberadamente distintos. No secuencialmente. En paralelo. Cada uno con un prompt que fuerza un lente de expertise especifico.
+
+## Como funciona el sistema en la practica
+
+Mi setup de produccion, que describi en el [post de SpecForge](/es/blog/specforge-spec-driven-framework), usa cuatro revisores en paralelo. Cada uno recibe exactamente el mismo spec. Cada uno tiene exactamente el mismo acceso al codebase. Lo unico que cambia es el system prompt que le dice de que preocuparse.
+
+El reviewer de backend recibe instrucciones de enfocarse en modelos de datos, consistencia, transacciones, race conditions, migraciones y cumplimiento del contrato API. Lee el spec con el lente de "esto va a funcionar correctamente bajo carga concurrente y el modelo de datos va a envejecer bien".
+
+El reviewer de frontend se enfoca en flujos UX, estados de UI, accesibilidad, presentacion de errores y como el contrato del backend se refleja en lo que ve el usuario. Lee el spec con el lente de "que va a experimentar el usuario realmente, incluyendo cuando las cosas salen mal".
+
+El reviewer de seguridad se enfoca en validacion de inputs, limites de autorizacion, exposicion de secrets, manejo de PII y analisis de superficie de ataque. Lee el spec con el lente de "como romperia esto, y cual es el radio de explosion".
+
+El reviewer de quality se enfoca en cobertura de tests, completitud de criterios de aceptacion, edge cases, observabilidad y si el spec es realmente testeable tal como esta escrito. Lee el spec con el lente de "puedo verificar que esto funciona, y que escenarios faltan".
+
+Todos corren en paralelo. Todos devuelven reportes estructurados con ratings de severidad. Y luego yo me siento a leer los cuatro reportes juntos, porque la parte interesante nunca es lo que dice un reviewer en aislamiento. Es donde discrepan.
+
+## Que atrapa cada reviewer que los otros no ven
+
+Despues de correr este sistema en unas 60 specs a lo largo de cinco microservicios durante los ultimos cuatro meses, tengo suficientes datos para ver patrones. Asi lucen los numeros en realidad.
+
+El reviewer de backend tiene una tasa de deteccion de aproximadamente 72% para problemas de modelo de datos y una tasa de falsos positivos de alrededor del 15%. Consistentemente encuentra cosas como indices faltantes en patrones de query, limites de transaccion que no coinciden con la operacion de negocio, y secuencias de migracion que causarian downtime. Lo que no ve: cualquier cosa que requiera entender el modelo mental del usuario. Va a aprobar una API perfectamente consistente que es completamente inusable desde el frontend.
+
+El reviewer de frontend atrapa gaps de UX en aproximadamente 65% y tiene la tasa de falsos positivos mas alta, cerca del 23%. Marca estados de carga faltantes, mensajes de error que exponen detalles internos y violaciones de accesibilidad. Los falsos positivos tienden a ser casos donde sugiere patrones de UI que no coinciden con nuestro design system. Lo que no ve: cualquier cosa debajo de la capa del API. Va a aprobar un flujo de usuario bellamente descrito que depende de una query de base de datos que va a dar timeout a escala.
+
+El reviewer de seguridad tiene la tasa de deteccion mas baja, aproximadamente 45%, pero la tasa de falsos positivos mas baja, 8%, y cuando pilla algo casi siempre es real y casi siempre es algo que los otros tres no vieron en absoluto. Leaks de tokens, scopes de autorizacion demasiado amplios, PII en logs, vulnerabilidades IDOR en endpoints nuevos. La tasa de deteccion baja es porque la mayoria de specs no tienen problemas de seguridad. Cuando los tienen, este reviewer se paga solo en segundos.
+
+El reviewer de quality atrapa aproximadamente el 58% de gaps de testeabilidad y edge cases con una tasa de falsos positivos del 12%. Encuentra criterios de aceptacion faltantes, requisitos no testeables, edge cases que no estan cubiertos y gaps de observabilidad. Su contribucion mas valiosa es la negativa: "este spec describe lo que deberia pasar pero nunca describe lo que deberia pasar cuando el proveedor de pagos esta caido".
+
+Combinados, los cuatro revisores atrapan aproximadamente el 89% de los problemas que se habrian convertido en bugs o incidentes. Corriendo un solo reviewer, cualquier reviewer individual, atrapa entre 45% y 72% dependiendo del dominio. El delta entre un reviewer y cuatro no es aditivo. Es multiplicativo. Porque el punto ciego de cada reviewer es el foco principal de otro.
+
+## El problema del arbitraje
+
+Aqui es donde la narrativa de la industria se viene abajo por completo. Cada framework multi-agente te dice que los agentes pueden "colaborar" y "llegar a consenso". En la practica, agentes llegando a consenso significa agentes promediando sus opiniones, y las opiniones promediadas no sirven para nada.
+
+Cuando el reviewer de seguridad dice que un endpoint nuevo necesita rate limiting y el reviewer de backend dice que el rate limiting añade latencia que viola el SLA de performance, no hay resolucion algoritmica. Eso es una decision de producto. Un humano tiene que sentarse, entender ambas preocupaciones, y decidir: aceptamos la latencia o aceptamos el riesgo. Y esa decision depende de contexto que ningun agente tiene: que tan critico es este endpoint, cual es nuestro threat model actual, tenemos un WAF que ya maneja esto, es un API publico o interno.
+
+Intente automatizar el arbitraje. De verdad lo intente. Construi un quinto agente cuyo trabajo era leer los cuatro reportes y producir una recomendacion sintetizada. El resultado fue un documento diplomatico que le daba la razon a todos y lo recomendaba todo. Era el peor tipo de consenso: el tipo que añade scope en vez de tomar decisiones.
+
+El patron que funciona: un humano lee los cuatro reportes, marca cada hallazgo como "aceptar", "rechazar" o "diferir", y añade una justificacion de una linea. Me toma unos 15 minutos por spec. Ese es el costo real de la orquestacion multi-agente, y es la parte de la que nadie quiere hablar porque no encaja en el marketing de "agentes autonomos".
+
+## MCP como capa de coordinacion
+
+La razon por la que esto funciona como un sistema coherente es MCP. Cada reviewer es una sesion de Claude Code con acceso al mismo conjunto de [servidores MCP](/es/blog/building-production-mcp-servers) que proveen las herramientas que necesitan: acceso al sistema de archivos del repo, un servidor de busqueda para navegacion del codebase, y el tooling de SpecForge que gestiona el estado del PRD y acceso al SYSTEM_ARTIFACT.
+
+MCP provee la capa de infraestructura compartida. Los revisores no necesitan coordinarse entre ellos. No comparten estado. No se pasan mensajes entre si. Cada uno se conecta independientemente a los mismos servidores de herramientas, lee el mismo codebase y produce su reporte. La coordinacion ocurre a traves del artefacto que todos estan revisando, no a traves de comunicacion inter-agente.
+
+Esta es una decision arquitectonica critica. La comunicacion inter-agente es donde los sistemas multi-agente van a morir. En el momento en que el Agente A le manda un mensaje al Agente B pidiendo aclaracion, tienes un sistema distribuido con todos los problemas que describi en mi [post sobre construir sistemas escalables](/es/blog/building-scalable-systems): fallos parciales, ordenamiento de mensajes, inconsistencia de estado y timeouts en cascada. Y tienes esos problemas en un sistema donde los "mensajes" son lenguaje natural, lo que significa que los modos de fallo ni siquiera son deterministicos.
+
+Infraestructura compartida, ejecucion independiente, arbitraje humano. Ese es el patron. No es glamoroso. Mapea directamente a como funciona el code review en equipos de ingenieria sanos: multiples revisores, mismo PR, diferente expertise, el autor toma la decision final. Resolvimos este problema de coordinacion para humanos hace decadas. La version con agentes es el mismo patron con participantes diferentes.
+
+## Patrones de sistemas distribuidos que aplican
+
+Si entrecierras los ojos, el sistema de cuatro revisores es un protocolo de consenso de solo lectura. Cada reviewer es una replica que procesa el mismo input independientemente. El "consenso" es manual: yo leo los outputs y decido. Pero los patrones de sistemas distribuidos son sorprendentemente aplicables.
+
+**Replicas independientes sobre eleccion de lider.** Los revisores no eligen un lider. No hay un reviewer primario cuya opinion anule a las demas. Cada uno corre independientemente con su propio prompt y produce su propio output. Esto elimina el punto unico de fallo que las arquitecturas basadas en lider introducen. Si el reviewer de seguridad da timeout, los otros tres siguen produciendo output util.
+
+**Consistencia eventual sobre consistencia fuerte.** Los reviews no necesitan estar de acuerdo. De hecho, el desacuerdo es señal. Cuando el reviewer de backend dice "esta migracion es segura" y el reviewer de quality dice "esta migracion no tiene plan de rollback", ambos tienen razon desde su perspectiva. La inconsistencia es la parte valiosa. Forzarlos a ponerse de acuerdo destruiria informacion.
+
+**Resolucion de conflictos en el borde.** En sistemas distribuidos, la resolucion de conflictos ocurre en el punto mas cercano al usuario. En la revision multi-agente, la resolucion de conflictos ocurre con el humano que tiene el contexto de producto. Los revisores proveen evidencia. El humano resuelve conflictos. Intentar automatizar la resolucion de conflictos es el equivalente agente de intentar mergear escrituras conflictivas automaticamente: a veces puedes, pero los casos donde no puedes son los que importan.
+
+**Operaciones idempotentes.** Cada review es idempotente. Puedo re-ejecutar cualquier reviewer sobre el mismo spec y obtener la misma clase de output (no identico, porque los LLMs no son deterministicos, pero los mismos hallazgos en severidad y categoria). Esto significa que puedo re-ejecutar selectivamente revisores sobre secciones actualizadas sin re-revisar el spec completo.
+
+## Anti-patrones comunes en multi-agente
+
+Despues de un año experimentando con diferentes configuraciones multi-agente, tengo un catalogo decente de lo que no funciona.
+
+**Cadenas de delegacion agente-a-agente.** El Agente A decide que necesita mas informacion y le pregunta al Agente B, que le pregunta al Agente C, que le pregunta al Agente D. Para cuando la respuesta vuelve, paso por tres capas de compresion de lenguaje natural y la pregunta original es irreconocible. He visto cadenas donde la respuesta final era tecnicamente correcta pero respondia a una pregunta que nadie habia hecho, porque cada handoff reformulaba sutilmente el problema.
+
+**Loops de mejora sin supervision.** Un agente escribe codigo, el agente de testing corre los tests, el agente de testing reporta fallos, el agente de codigo los arregla, repite. Suena a CI/CD pero en realidad es un loop infinito sin garantia de convergencia. He visto loops donde el agente de codigo arregla el Test A rompiendo el Test B, luego arregla el Test B rompiendo el Test A, oscilando indefinidamente. Sin un humano que corte el circuito, estos loops consumen tokens proporcionales a la incapacidad del agente para resolver el problema subyacente.
+
+**Sangrado de contexto.** Multiples agentes compartiendo el mismo contexto de conversacion y pisandose el estado mutuamente. El Agente A monta un modelo mental, el Agente B lo sobreescribe con uno diferente, la siguiente respuesta del Agente A es incoherente porque su contexto fue contaminado. Este es el equivalente multi-agente del estado mutable compartido, y la solucion es la misma: no compartas estado mutable. Dale a cada agente su propio contexto. Coordina a traves de artefactos inmutables compartidos, no a traves de conversacion compartida.
+
+**El fallback generalista.** Cuando un reviewer especializado se encuentra con algo fuera de su dominio, da una opinion generica en vez de decir "esto esta fuera de mi alcance". El reviewer de seguridad comentando sobre patrones de UX. El reviewer de frontend opinando sobre indices de base de datos. Estas opiniones fuera de dominio tienen la tasa de falsos positivos mas alta y el valor de señal mas bajo. Los buenos prompts de reviewer le dicen explicitamente al agente que ignorar.
+
+## La economia: cuando pagar por cuatro cerebros
+
+Multi-agente no es gratis. Cuatro reviews paralelos de un spec tipico cuestan aproximadamente $2-4 en tokens. Un review de un solo agente cuesta $0.40-0.80. A lo largo de un mes de desarrollo activo en cinco servicios, gasto aproximadamente $180-250 en reviews multi-agente.
+
+Cuando vale la pena: cualquier spec que toque autenticacion, pagos, PII o limites entre multiples servicios. Cualquier spec donde el radio de explosion de un bug sea visible para el cliente. Cualquier spec para un endpoint nuevo o un modelo de datos nuevo. Para estos, los $2-4 por review son triviales comparados con el costo de un incidente en produccion.
+
+Cuando un solo agente esta bien: cambios en herramientas internas, actualizaciones de documentacion, tweaks de configuracion, ajustes menores de UI. Cualquier cosa donde el radio de explosion sea pequeño y el dominio sea estrecho. Para estos, un reviewer con el prompt correcto atrapa suficiente.
+
+Mi regla de oro: si le pediria a un colega que revise este PR, corro review multi-agente sobre el spec. Si yo mismo haria self-merge de este PR, un solo agente o ninguna revision esta bien.
+
+## Como se comparan los enfoques
+
+| Aspecto | **SpecForge Reviewers** | **CrewAI** | **LangGraph** | **AutoGen** | **Claude Managed Agents** |
+|---|---|---|---|---|---|
+| Paradigma | Criticos paralelos, mismo artefacto | Equipos de agentes por rol | Maquinas de estado basadas en grafo | Grupos conversacionales de agentes | Sub-agentes de tool-use |
+| Coordinacion | Arbitraje humano | Secuencial/jerarquico | Edges explicitos en el grafo | Negociacion via chat | Agente padre orquesta |
+| Comunicacion inter-agente | Ninguna (por diseño) | Handoffs de tareas | Transiciones de estado | Mensajes en group chat | Resultados de tool calls |
+| Mejor para | Review de specs, quality gates | Workflows multi-paso | Logica de branching compleja | Investigacion, brainstorming | Delegacion de herramientas con scope |
+| Peor para | Generacion de codigo, ejecucion | Tareas de critica/review | Flujos lineales simples | Workflows deterministicos | Exploracion abierta |
+| Madurez en produccion | Battle-tested (mi uso) | Madurando, comunidad activa | Solido, respaldado por LangChain | Orientado a investigacion | Temprano pero prometedor |
+| Eficiencia de tokens | 4x agente individual (fijo) | Variable, puede dispararse | Predecible por nodo | Impredecible (loops de chat) | 1.5-3x agente individual |
+| Human-in-the-loop | Requerido (ese es el punto) | Opcional, frecuentemente omitido | Breakpoints configurables | Posible pero incomodo | Natural via el padre |
+| Modo de fallo | Hallazgos perdidos (manejable) | Fallos en cadena en cascada | Corrupcion de estado | Loops infinitos | Overflow de contexto |
+
+La evaluacion honesta: la mayoria de estos frameworks resuelven problemas diferentes. CrewAI y AutoGen estan diseñados para agentes que hacen tareas distintas y se coordinan. LangGraph es un motor de workflow que resulta soportar agentes. Claude Managed Agents es un patron de delegacion para dividir tareas grandes en mas pequeñas. Los revisores de SpecForge son especificamente sobre multiples perspectivas sobre el mismo artefacto. Compararlos directamente es un poco como comparar una herramienta de code review con un pipeline de CI/CD. Son complementarios, no competitivos.
+
+## Lo que esto no resuelve
+
+La revision multi-agente es un filtro, no una garantia. Esto es lo que no hace.
+
+No atrapa bugs que solo se manifiestan en runtime. Cuatro revisores leyendo un spec pueden atrapar errores logicos, edge cases faltantes y problemas arquitectonicos. No pueden atrapar que tu version especifica de PostgreSQL maneja un JOIN especifico de forma diferente bajo alta concurrencia. La revision estatica, incluso la revision estatica multi-perspectiva, tiene las mismas limitaciones que siempre ha tenido.
+
+No reemplaza expertise de dominio para la que los revisores no fueron prompteados. Si tu spec tiene un problema de compliance que requiere conocer las regulaciones de HIPAA, y ninguno de tus revisores fue prompteado con conocimiento de HIPAA, no lo van a atrapar. La calidad del output esta acotada por la calidad de los prompts de los revisores. Prompts basura, reviews basura.
+
+No escala linealmente. Pasar de 4 revisores a 8 no duplica la tasa de deteccion. Probe con 6 revisores (añadiendo uno de "performance" y otro de "DevOps") y la mejora marginal fue minima mientras que el tiempo de arbitraje casi se duplico. Cuatro parece ser el sweet spot para el tipo de trabajo full-stack que hago. Tu experiencia puede variar segun la complejidad de tu dominio.
+
+No arregla specs malos. Si el spec de entrada es vago, contradictorio o erroneo, cuatro revisores van a producir cuatro reportes detallados sobre un spec malo. Van a atrapar inconsistencias internas, pero no pueden decirte que tus requisitos de producto estan mal. Eso sigue siendo un problema humano.
+
+Y no hace que el [uso deliberado de IA](/es/blog/structured-ai-usage-for-developers) sea opcional. Correr multi-agente sin entender lo que estas revisando y por que es solo quemar tokens con pasos extra. El humano en el loop tiene que realmente hacer loop. Leer cuatro reportes y hacer click en "aceptar todo" anula todo el proposito.
+
+## La conclusion incomoda
+
+El patron multi-agente que funciona en produccion es aburrido. No son agentes autonomos colaborando en un workspace digital. Son cuatro procesos aislados leyendo el mismo documento con instrucciones diferentes, produciendo reportes, y un humano tomando decisiones. Es code review. Es lo mismo que los equipos de ingenieria han hecho durante treinta años, con LLMs en lugar de colegas.
+
+La razon por la que funciona es la misma razon por la que funciona el code review: ninguna perspectiva individual es suficiente para sistemas complejos. La razon por la que la mayoria de arquitecturas multi-agente fallan es la misma razon por la que falla el diseño por comite: quitar al humano que decide no hace las decisiones mas rapidas, las hace peores.
+
+Pase meses intentando construir la version autonoma. La version donde los agentes hablan entre si, llegan a consenso y producen un output final sin intervencion humana. No funciona. No porque la tecnologia no este lista, sino porque el problema es fundamentalmente uno que requiere juicio, y el juicio requiere responsabilidad, y la responsabilidad requiere un humano al que van a llamar a las 3 AM si la decision fue mala.
+
+Si estas construyendo sistemas multi-agente, empieza con la version aburrida. Mismo artefacto, multiples perspectivas, arbitraje humano. Haz que funcione. Mide la tasa de deteccion. Entiende la tasa de falsos positivos. Aprende que prompts de reviewer producen señal y cuales producen ruido. Despues, si quieres, intenta automatizar el arbitraje. Vas a entender por que yo deje de intentarlo.
+
+El framework es open source en [SpecForge](https://github.com/angelkurten/specforge-framework). Los cuatro prompts de reviewer estan en el repositorio. Pruebalos en tu proximo spec y cuenta cuantos hallazgos habrias perdido solo. Para mi, ese numero fue lo suficientemente alto como para hacer todo esto no-opcional.

@@ -1,0 +1,155 @@
+---
+title: "Tu CI/CD No Funciona para Codigo Escrito por IA"
+date: 2026-04-12
+description: "Los tests pasan, el lint esta limpio, el PR se ve perfecto. Pero los agentes de IA introducen modos de fallo que tu pipeline no fue diseñado para detectar. Esto es lo que hay que agregar."
+tags: [evaluation, ai, testing, ci-cd, claude-code, software-development, quality]
+published: true
+translationSlug: "eval-driven-development-ai"
+---
+
+Durante meses confie en los builds verdes. Los tests pasaban, el lint estaba limpio, los type checks salian bien, el diff del PR se leia como algo que un senior competente habria escrito. Aprobaba, mergeaba, seguia adelante. Estaba entregando mas rapido que nunca. Me sentia productivo.
+
+Entonces un viernes por la tarde me sente a debuggear un loop de reintentos raro en nuestro servicio de notificaciones, y note algo que me revolvio el estomago. El agente habia introducido tres patrones de manejo de errores distintos en el mismo codebase en una sola semana. Un modulo usaba clases de error personalizadas con bloques catch tipados. Otro usaba un patron result-type con wrappers `Ok`/`Err`. Un tercero simplemente lanzaba strings crudos y atrapaba `unknown`. Cada uno de ellos pasaba los tests. Cada uno era internamente consistente. Y cada uno era correcto, en aislamiento.
+
+Pero el codebase se estaba pudriendo por dentro. No porque algo estuviera roto. Porque nada era coherente.
+
+Revise dos meses de PRs mergeados. El drift arquitectonico estaba en todos lados. Los patrones de import habian cambiado gradualmente. Algunos modulos usaban barrel exports, otros usaban imports directos. Los error boundaries seguian tres filosofias distintas. La logica de reintentos vivia en cuatro lugares diferentes con cuatro estrategias de backoff distintas. El agente nunca habia introducido un bug. Habia introducido entropia. Y todo mi pipeline de CI/CD -- eso en lo que confiaba para que me dijera cuando algo estaba mal -- me habia dado una palomita verde en cada commit.
+
+Esa fue la semana en que deje de confiar en CI/CD para codigo escrito por IA.
+
+## La tesis es incomoda pero simple
+
+CI/CD fue diseñado para atrapar los modos de fallo de desarrolladores humanos. Errores de sintaxis, type mismatches, tests rotos, violaciones de estilo, conflictos de dependencias. Los humanos somos buenos manteniendo patrones pero malos en la ejecucion tediosa, asi que nuestro tooling se optimizo para atrapar errores de ejecucion.
+
+Los agentes de IA tienen el perfil opuesto. Son excelentes en ejecucion -- la sintaxis siempre es correcta, los tipos generalmente cuadran, los tests pasan porque el agente escribio tanto el codigo como los tests. Pero son pesimos manteniendo coherencia arquitectonica entre cambios, porque cada cambio se genera en un contexto fresco sin memoria de las decisiones de diseño que dieron forma al codebase. El agente no hace drift a proposito. Hace drift porque no tiene concepto de "como hacemos las cosas aqui" mas alla de lo que cabe en la ventana de contexto en ese momento.
+
+Documente los numeros crudos en mi post anterior sobre [agentes de IA rompiendo codebases](/es/blog/ai-agents-breaking-codebases): el 75% de los agentes rompen codigo que antes funcionaba durante ciclos de mantenimiento. Ese post era sobre el problema. Este post es sobre lo que construi para realmente detectarlo.
+
+## Cinco modos de fallo para los que tu pipeline no fue diseñado
+
+Estas son las formas especificas en que el codigo generado por IA se cuela por tu CI/CD tradicional. He visto cada una de ellas en produccion.
+
+**Alucinacion silenciosa.** El agente inventa una funcion, un modulo, un endpoint. No de una forma que falle al compilar -- eso seria facil. Inventa algo que compila, pasa type checks, y parece funcionar, pero no existe de la manera que el resto del sistema espera. Describi un caso en el [post de SpecForge](/es/blog/specforge-spec-driven-framework) donde un agente fabrico dos funciones helper con firmas correctas y rutas de import validas. Los tests pasaron porque el agente tambien escribio los tests, y los tests validaban el comportamiento alucinado. La funcion existia. Simplemente no deberia haber existido.
+
+**Drift arquitectonico.** Este fue el que me atrapo. El agente no toma una decision consciente de cambiar tu estrategia de manejo de errores. Simplemente genera codigo usando cualquier patron que infiere de los archivos en su ventana de contexto. Si cargo tres archivos que usan el patron A y un archivo que usa el patron B, puede generar el patron B. O el patron C. Con el paso de las semanas, el codebase pierde coherencia. Ningun commit individual esta mal. El agregado es un desastre. Los linters tradicionales no detectan esto porque verifican sintaxis, no filosofia arquitectonica.
+
+**Regresion de versiones de dependencias.** Los datos de entrenamiento del agente mezclan patrones de multiples versiones de librerias. Escribe codigo usando un patron del SDK v1 cuando tu proyecto usa v2. Llama a una API deprecada que todavia funciona pero fue reemplazada por una razon. El codigo compila, los tests pasan, y seis meses despues descubres que has estado acumulando deuda de compatibilidad porque el agente seguia recurriendo a patrones que vio con mas frecuencia durante el entrenamiento.
+
+**Inconsistencia de patrones.** Tres formas distintas de manejar errores. Dos enfoques diferentes para inyeccion de dependencias. Cuatro estrategias de reintentos en un solo servicio. Cada una individualmente correcta. Juntas, inmantenibles. Esto es diferente del drift porque puede pasar en un solo PR. El agente genera codigo para multiples archivos en una sesion y usa un enfoque distinto en cada uno porque el contexto local de cada archivo sugeria algo ligeramente diferente.
+
+**Context bleeding.** El agente aplica patrones de un servicio a otro donde no corresponden. Tu servicio de pagos usa transacciones saga porque necesita rollback distribuido. Tu servicio de notificaciones no necesita sagas. Pero el agente, habiendo trabajado en ambos en la misma sesion, importa el patron saga a notificaciones porque "aprendio" que asi es como este equipo hace las cosas. El codigo funciona. Tambien esta brutalmente sobre-diseñado para una notificacion fire-and-forget, y ahora alguien tiene que mantener orquestacion saga en un servicio que deberian haber sido tres lineas de codigo async.
+
+Cada uno de estos modos de fallo produce codigo que es sintacticamente correcto, type-safe, y cubierto por tests. Exactamente por eso CI/CD no los detecta. El pipeline verifica si el codigo funciona. No verifica si el codigo pertenece.
+
+## Que significa realmente "evaluacion" para codigo de IA
+
+Cuando digo "evaluacion" no me refiero a mas tests. Los tests verifican comportamiento. La evaluacion verifica intencion. La pregunta no es "esta funcion devuelve el valor correcto" sino "esta funcion existe por la razon correcta, en el lugar correcto, usando los patrones correctos, consistente con como funciona el resto del sistema."
+
+Esta es una categoria de validacion completamente diferente. Los tests son aserciones sobre outputs. Las evaluaciones son aserciones sobre decisiones. Y cuando un LLM esta tomando las decisiones, necesitas ambas.
+
+Empece a construir capas de evaluacion despues de ese descubrimiento del viernes por la tarde. El objetivo era especifico: detectar los cinco modos de fallo de arriba antes del merge, sin ralentizar el pipeline lo suficiente como para matar la ventaja de velocidad de usar agentes en primer lugar. Esto es con lo que termine.
+
+## Las capas de evaluacion que realmente uso
+
+**Capa 1: Scoring de consistencia arquitectonica.** Antes de que un PR se mergee, un script analiza los archivos cambiados y compara los patrones usados contra una baseline extraida del codebase existente. Patrones de manejo de errores, estilos de import, estrategias async, enfoques de reintentos, convenciones de logging. Cada archivo recibe un score de consistencia entre 0 y 1, donde 1 significa "este archivo usa exactamente los mismos patrones que el resto del codebase" y 0 significa "este archivo hace todo diferente."
+
+La implementacion es menos sofisticada de lo que suena. Construi un extractor de patrones que ejecuta analisis AST sobre el codebase y produce una huella digital de los patrones dominantes: que tipos de error se usan, como estan estructurados los imports, si domina async/await o promesas, como se implementan los reintentos. El codigo nuevo recibe la misma extraccion de huella digital, y las dos se comparan. Un score de consistencia por debajo de 0.7 bloquea el PR con un mensaje explicando que patrones divergieron. El ingeniero (yo, generalmente) entonces decide si la divergencia es intencional o drift.
+
+Cuando active esto por primera vez, el 40% de los PRs generados por agentes puntuaban por debajo de 0.7. Cuarenta por ciento. Todos habian pasado CI. Todos tenian tests verdes. Casi ninguna de las divergencias de patrones era intencional.
+
+**Capa 2: Deteccion de drift.** Esto es mas sutil que el scoring de consistencia. La consistencia verifica un solo PR contra el codebase. La deteccion de drift rastrea patrones a lo largo del tiempo. Mantengo una ventana movil de los ultimos 30 PRs mergeados y analizo la tendencia: ¿los patrones de manejo de errores estan convergiendo o divergiendo? ¿Estan apareciendo nuevos estilos de import? ¿El codebase se esta volviendo mas o menos consistente con el tiempo?
+
+Cuando el drift supera un umbral -- es decir, el codebase es mediblemente menos consistente que hace 30 PRs -- el sistema lo marca como una alerta de salud del codebase. Esto no es un bloqueador de PRs. Es una señal de que necesito sentarme, mirar el agregado, y decidir si el codebase necesita un pase de reconciliacion. Hago esto aproximadamente una vez al mes. Antes de la deteccion de drift, lo hacia nunca, y el codebase pagaba por ello.
+
+**Capa 3: Validacion de referencias.** Cada import, cada llamada a funcion, cada referencia de tipo en los archivos cambiados se verifica contra el codebase real. No contra declaraciones de tipos o stubs -- contra el codigo fuente real. Si el agente referencia `utils/formatCurrency` y esa funcion no existe, o existe con una firma diferente, el PR se bloquea.
+
+Esto suena a lo que el compilador de TypeScript ya hace, y para codebases con type checking parcialmente lo es. Pero la validacion de referencias va mas alla: verifica que el codigo referenciado hace lo que el PR asume que hace, no solo que existe. Si el agente llama `formatCurrency(amount)` y la firma real de la funcion es `formatCurrency(amount, locale)`, el type checker puede o no detectarlo dependiendo de si `locale` tiene un valor por defecto. La validacion de referencias lo detecta porque compara patrones de uso contra la implementacion real. Esta es la capa que mata la alucinacion silenciosa. Desde que la agregue, he detectado cero referencias alucinadas en produccion. Antes de ella, detectaba una o dos al mes, siempre despues del merge.
+
+**Capa 4: Review multi-perspectiva.** Este es el sistema de cuatro revisores que describi en el [post de SpecForge](/es/blog/specforge-spec-driven-framework), adaptado de revision de specs a revision de codigo. Cuatro revisores LLM corren en paralelo en cada PR generado por agentes, cada uno con un enfoque diferente:
+
+- Backend: consistencia de datos, seguridad transaccional, compatibilidad de schema, race conditions
+- Frontend: manejo de estado, estados de error, accesibilidad, comportamiento visible al usuario
+- Seguridad: validacion de inputs, limites de auth, exposicion de secretos, superficies de inyeccion
+- Calidad: gaps de cobertura de tests, edge cases, observabilidad, consistencia de patrones
+
+Cada revisor produce un reporte con severidades. Rojo bloquea el merge. Amarillo requiere revision humana. Verde pasa. Los revisores discrepan regularmente, y ese es el punto. Un cambio que se ve bien desde la perspectiva de backend puede tener una implicacion de seguridad que solo sale a la luz cuando lo miras a traves de ese lente.
+
+La tasa de falsos positivos era alta al principio -- alrededor del 25% de los rojos no eran problemas reales. Despues de dos meses de ajustar los prompts de los revisores y agregar ejemplos de falsos positivos a su contexto, la tasa de falsos positivos bajo a alrededor del 8%. Eso es tolerable. Prefiero revisar unas cuantas falsas alarmas que perderme una violacion arquitectonica real.
+
+## Que cambio cuando active esto
+
+Numeros, porque afirmaciones sin datos son solo opiniones.
+
+Antes de las capas de evaluacion: detectaba problemas arquitectonicos un promedio de 11 dias despues del merge. Para entonces, otro codigo se habia construido encima de los patrones desviados, haciendo la remediacion costosa. Tiempo promedio para arreglar una inconsistencia de patrones una vez identificada: 4 horas, porque generalmente se habia propagado a 3-5 archivos.
+
+Despues de las capas de evaluacion: los problemas se detectan pre-merge. Tiempo promedio para arreglar: 15 minutos, porque la divergencia de patrones esta contenida a los archivos del PR actual. El score de consistencia a lo largo del codebase paso de 0.64 a 0.89 en tres meses. El numero de "pases de reconciliacion" que necesitaba hacer bajo de semanal a mensual.
+
+El paralelo mas cercano que tengo para este tipo de mejora basada en mediciones es lo que hicimos con el [pipeline de RAG](/es/blog/practical-rag-pipeline-guide), donde la precision de retrieval paso de 58% a 91% una vez que realmente medimos y optimizamos para ello. El patron es el mismo: no puedes mejorar lo que no mides, y las metricas por defecto (tests pasando, retrieval devolviendo resultados) no estan midiendo lo que realmente importa.
+
+Incremento total en tiempo del pipeline: unos 90 segundos por PR. El scoring de consistencia toma 15 segundos. La deteccion de drift toma 10 segundos. La validacion de referencias toma 20 segundos. El review multi-perspectiva toma 40-50 segundos corriendo en paralelo. Para contexto, el PR promedio generado por agentes ya tardaba 3-4 minutos en pasar por CI. 90 segundos extra son ruido.
+
+## Tradicional vs. aumentado con IA vs. eval-driven
+
+Esta tabla captura la diferencia en lo que cada pipeline detecta.
+
+| Validation layer | Traditional CI/CD | AI-augmented pipeline | Eval-driven development |
+|---|---|---|---|
+| Syntax and type errors | Yes | Yes | Yes |
+| Test failures | Yes | Yes | Yes |
+| Lint and style violations | Yes | Yes | Yes |
+| Dependency conflicts | Yes | Yes | Yes |
+| Silent hallucination | No | Partial (if using grounding) | Yes (reference validation) |
+| Architectural drift | No | No | Yes (drift detection) |
+| Pattern inconsistency | No | No | Yes (consistency scoring) |
+| Version regression | No | Partial (if pinned) | Yes (reference validation) |
+| Context bleeding | No | No | Yes (multi-perspective review) |
+| Cross-service coherence | No | No | Yes (consistency scoring) |
+| Pipeline time overhead | Baseline | +30s | +90s |
+
+La columna del medio -- AI-augmented -- es lo que la mayoria de los equipos hacen hoy: agregan un paso de grounding o un archivo CLAUDE.md y esperan que el agente lo respete. Ayuda. No es suficiente. El grounding reduce la alucinacion pero no hace nada contra el drift, la inconsistencia, o el context bleeding. Necesitas capas de evaluacion que midan activamente la coherencia arquitectonica, no solo que verifiquen que el codigo compila.
+
+## El angulo regulatorio que no puedes ignorar
+
+El EU AI Act entra en vigor completo en agosto de 2026. El Articulo 14 requiere "supervision humana" para sistemas de IA de alto riesgo, y el Articulo 11 exige "documentacion tecnica" incluyendo trazabilidad de los outputs generados por IA. Si estas construyendo software que cae bajo el alcance de la ley -- y ese alcance es mas amplio de lo que la mayoria de los ingenieros creen -- necesitas poder demostrar que el codigo generado por IA fue evaluado, no solo testeado.
+
+El desarrollo eval-driven no es solo buena ingenieria. Se esta convirtiendo en un requisito de compliance. La trazabilidad que las capas de evaluacion proporcionan -- que patrones se verificaron, cual fue el score de consistencia, que revisores señalaron que -- es exactamente el tipo de documentacion que la ley contempla. Escribi sobre el lado de observabilidad de esto en el [post de servidores MCP](/es/blog/building-production-mcp-servers): si no puedes observar lo que tus sistemas de IA estan haciendo, no puedes gobernarlos.
+
+Esto no es alarmismo. Es conciencia de plazos. Los equipos que construyan capas de evaluacion ahora tendran documentacion de compliance como efecto secundario. Los equipos que esperen estaran retrofiteando bajo presion de deadlines.
+
+## Como agregar esto sin frenar la entrega
+
+El orden de implementacion importa. No intentes agregar las cuatro capas a la vez. Esto es lo que recomiendo basado en lo que me funciono a mi.
+
+**Semana 1: Validacion de referencias.** Esta es la capa de mayor valor y menor esfuerzo. Escribe un script que extraiga todos los imports y llamadas a funciones de los archivos cambiados en un PR, y luego verifica cada uno contra el codebase. Bloquea el PR si algo no se resuelve. Esto solo mata la alucinacion silenciosa, que es el modo de fallo mas peligroso porque puede compilar y pasar tests.
+
+**Semana 2-3: Scoring de consistencia.** Construye un extractor de patrones para tu codebase. Empieza con patrones de manejo de errores y estilos de import -- esas son las dos areas donde el drift es mas visible. Extrae una huella digital baseline, compara los PRs nuevos contra ella, y establece un umbral inicial de 0.6 (permisivo). Ajustalo con el tiempo a medida que veas que dispara falsos positivos.
+
+**Mes 2: Review multi-perspectiva.** Agrega el sistema de cuatro revisores. Empieza en modo consultivo (reporta pero no bloquea) para que puedas ajustar los prompts y calibrar los umbrales de severidad. Pasalo a modo bloqueante una vez que la tasa de falsos positivos este por debajo del 15%.
+
+**Mes 3: Deteccion de drift.** Agrega el analisis de ventana movil. Esta es la capa menos urgente porque rastrea tendencias, no PRs individuales. Pero es la capa que te dice si las otras tres realmente estan funcionando a lo largo del tiempo.
+
+Cada capa tiene valor independiente. No necesitas las cuatro para ver mejoras. La validacion de referencias sola habria detectado el 60% de los problemas que encontre en mi sesion de horror del viernes por la tarde. El scoring de consistencia habria detectado el otro 40%.
+
+## Lo que esto no resuelve
+
+He aprendido a ser explicito sobre las limitaciones, porque los frameworks que dicen resolver todo no resuelven nada. Para contexto sobre como pienso sobre esto, el [post de uso estructurado de IA](/es/blog/structured-ai-usage-for-developers) cubre la filosofia mas amplia.
+
+**No arregla una mala arquitectura.** Si tu codebase ya tiene tres patrones de manejo de errores porque los humanos los introdujeron a lo largo de los años, el scoring de consistencia fielmente puntuara el codigo nuevo contra una baseline inconsistente. Necesitas reconciliar la baseline primero. La herramienta mide consistencia, no calidad.
+
+**No reemplaza la experiencia de dominio.** Los revisores multi-perspectiva son LLMs. Detectan patrones. No detectan errores de logica de negocio que requieren entender lo que el negocio realmente hace. Un revisor puede señalar que tu calculo de descuento carece de bounds checking. No puede señalar que la formula de descuento en si esta mal porque no conoce tus reglas de negocio.
+
+**No escala infinitamente.** Las capas de scoring de consistencia y validacion de referencias funcionan bien hasta unas 500K lineas de codigo. Mas alla de eso, la extraccion de patrones se vuelve costosa y la huella digital se llena de ruido. Para codebases mas grandes, necesitas delimitar el analisis al modulo o servicio relevante, no al repo entero.
+
+**No elimina la necesidad de revision humana.** Esto es critico. Las capas de evaluacion reducen la superficie que los humanos necesitan revisar. No la eliminan. El objetivo es hacer la revision humana eficiente, no eliminarla. Si usas las capas de evaluacion como excusa para dejar de leer diffs, vas a estar de vuelta en mi viernes por la tarde en unos tres meses.
+
+**Agrega overhead cognitivo.** Ahora hay una cosa nueva que entender, ajustar y mantener. Los umbrales del scoring de consistencia necesitan ajuste. Los prompts de los revisores necesitan actualizarse a medida que el codebase evoluciona. La ventana de deteccion de drift necesita calibracion. Este es trabajo real. Es menos trabajo que debuggear inconsistencias de patrones despues de que se han propagado por el codebase, pero no es cero.
+
+## La conclusion incomoda
+
+Construimos CI/CD durante dos decadas para atrapar los errores que los humanos cometen. Ahora tenemos un nuevo tipo de autor -- uno que no comete errores humanos pero comete otros completamente diferentes. El tooling no se ha puesto al dia. Los builds verdes nos dan una confianza que se gano en un mundo donde los humanos escribian el codigo, y esa confianza ahora esta mal depositada.
+
+El desarrollo eval-driven no es un reemplazo para CI/CD. Es una capa nueva encima, diseñada a proposito para los modos de fallo que los agentes de IA introducen. Consistencia de patrones, coherencia arquitectonica, integridad de referencias, critica multi-perspectiva. Estas no son cosas que los pipelines tradicionales fueron diseñados para verificar. Son cosas que nunca necesitamos verificar, porque los desarrolladores humanos las mantenian intuitivamente.
+
+Los agentes de IA no tienen intuicion. Tienen ventanas de contexto. Y si no evaluas lo que producen mas alla de "compila y pasan los tests," vas a terminar donde yo termine: un codebase que funciona perfectamente y que lentamente se esta volviendo inmantenible.
+
+La solucion no es dejar de usar agentes. La solucion es dejar de confiar en los builds verdes como si significaran lo que solian significar.

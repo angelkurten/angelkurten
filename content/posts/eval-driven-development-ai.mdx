@@ -1,0 +1,154 @@
+---
+title: "Your CI/CD Doesn't Work for AI-Written Code"
+date: 2026-04-12
+description: "Tests pass, lint is clean, PR looks perfect. But AI agents introduce failure modes your pipeline wasn't built to catch. Here's what to add."
+tags: [evaluation, ai, testing, ci-cd, claude-code, software-development, quality]
+published: true
+---
+
+For months I trusted green builds. Tests passed, lint was clean, type checks cleared, the PR diff read like something a competent senior would write. I approved, merged, moved on. I was shipping faster than ever. I felt productive.
+
+Then one Friday afternoon I sat down to debug a weird retry loop in our notifications service, and I noticed something that made my stomach drop. The agent had introduced three different error handling patterns across the same codebase in a single week. One module used custom error classes with typed catch blocks. Another used a result-type pattern with `Ok`/`Err` wrappers. A third just threw raw strings and caught `unknown`. Every single one of them passed tests. Every single one of them was internally consistent. And every single one of them was correct, in isolation.
+
+But the codebase was rotting from the inside. Not because anything was broken. Because nothing was coherent.
+
+I went back through two months of merged PRs. The architectural drift was everywhere. Import patterns had shifted gradually. Some modules used barrel exports, others used direct imports. Error boundaries followed three philosophies. Retry logic lived in four different places with four different backoff strategies. The agent had never introduced a bug. It had introduced entropy. And my entire CI/CD pipeline -- the thing I relied on to tell me when something was wrong -- had given me a green checkmark on every single commit.
+
+That was the week I stopped trusting CI/CD for AI-written code.
+
+## The thesis is uncomfortable but simple
+
+CI/CD was designed to catch the failure modes of human developers. Syntax errors, type mismatches, broken tests, style violations, dependency conflicts. Humans are good at maintaining patterns but bad at tedious execution, so our tooling optimized for catching execution errors.
+
+AI agents have the opposite profile. They are excellent at execution -- syntax is always correct, types usually check out, tests pass because the agent wrote both the code and the tests. But they are terrible at maintaining architectural coherence across changes, because each change is generated in a fresh context with no memory of the design decisions that shaped the codebase. The agent does not drift on purpose. It drifts because it has no concept of "the way we do things here" beyond whatever fits in the context window at that moment.
+
+I documented the raw numbers in my earlier post on [AI agents breaking codebases](/blog/ai-agents-breaking-codebases): 75% of agents break previously working code during maintenance cycles. That post was about the problem. This post is about what I built to actually catch it.
+
+## Five failure modes your pipeline was not built for
+
+These are the specific ways AI-generated code slips past traditional CI/CD. I have seen every one of them in production.
+
+**Silent hallucination.** The agent invents a function, a module, an endpoint. Not in a way that fails to compile -- that would be easy. It invents something that compiles, passes type checks, and appears to work, but does not exist in the way the rest of the system expects. I described a case in the [SpecForge post](/blog/specforge-spec-driven-framework) where an agent fabricated two helper functions with correct signatures and import paths. Tests passed because the agent also wrote the tests, and the tests validated the hallucinated behavior. The function existed. It just should not have.
+
+**Architectural drift.** This is the one that got me. The agent does not make a conscious decision to change your error handling strategy. It simply generates code using whatever pattern it infers from the files in its context window. If it loaded three files that use pattern A and one file that uses pattern B, it might generate pattern B. Or pattern C. Over weeks, the codebase loses coherence. No single commit is wrong. The aggregate is a mess. Traditional linters do not catch this because they check syntax, not architectural philosophy.
+
+**Dependency version regression.** The agent's training data blends patterns from multiple library versions. It writes code using a v1 SDK pattern when your project uses v2. It calls a deprecated API that still works but was replaced for a reason. The code compiles, tests pass, and six months later you discover you have been accumulating compatibility debt because the agent kept reaching for patterns it saw more frequently during training.
+
+**Pattern inconsistency.** Three different ways to handle errors. Two different approaches to dependency injection. Four retry strategies in one service. Each individually correct. Together, unmaintainable. This is different from drift because it can happen in a single PR. The agent generates code for multiple files in one session and uses a different approach in each because each file's local context suggested something slightly different.
+
+**Context bleeding.** The agent applies patterns from one service to another where they do not belong. Your payments service uses saga transactions because it needs distributed rollback. Your notifications service does not need sagas. But the agent, having worked on both in the same session, imports the saga pattern into notifications because it "learned" that is how this team does things. The code works. It is also wildly over-engineered for a fire-and-forget notification, and now someone has to maintain saga orchestration in a service that should have been three lines of async code.
+
+Every one of these failure modes produces code that is syntactically correct, type-safe, and test-covered. That is exactly why CI/CD misses them. The pipeline checks whether the code works. It does not check whether the code belongs.
+
+## What "evaluation" actually means for AI code
+
+When I say "evaluation" I do not mean more tests. Tests verify behavior. Evaluation verifies intent. The question is not "does this function return the right value" but "does this function exist for the right reason, in the right place, using the right patterns, consistent with how the rest of the system works."
+
+This is a different category of validation entirely. Tests are assertions about outputs. Evaluations are assertions about decisions. And when an LLM is making the decisions, you need both.
+
+I started building evaluation layers after that Friday afternoon discovery. The goal was specific: catch the five failure modes above before merge, without slowing down the pipeline enough to kill the speed advantage of using agents in the first place. Here is what I ended up with.
+
+## The evaluation layers I actually use
+
+**Layer 1: Architectural consistency scoring.** Before a PR merges, a script analyzes the changed files and compares the patterns used against a baseline extracted from the existing codebase. Error handling patterns, import styles, async strategies, retry approaches, logging conventions. Each file gets a consistency score between 0 and 1, where 1 means "this file uses exactly the same patterns as the rest of the codebase" and 0 means "this file does everything differently."
+
+The implementation is less sophisticated than it sounds. I built a pattern extractor that runs AST analysis on the codebase and produces a fingerprint of the dominant patterns: which error types are used, how imports are structured, whether async/await or promises dominate, how retries are implemented. New code gets the same fingerprint extraction, and the two are compared. A consistency score below 0.7 blocks the PR with a message explaining which patterns diverged. The engineer (me, usually) then decides whether the divergence is intentional or drift.
+
+When I first turned this on, 40% of agent-generated PRs scored below 0.7. Forty percent. All of them had passed CI. All of them had green tests. Almost none of the pattern divergences were intentional.
+
+**Layer 2: Drift detection.** This is subtler than consistency scoring. Consistency checks a single PR against the codebase. Drift detection tracks patterns over time. I keep a rolling window of the last 30 merged PRs and analyze the trend: are error handling patterns converging or diverging? Are new import styles creeping in? Is the codebase getting more or less consistent over time?
+
+When drift exceeds a threshold -- meaning the codebase is measurably less consistent than it was 30 PRs ago -- the system flags it as a codebase health alert. This is not a PR blocker. It is a signal that I need to sit down, look at the aggregate, and decide whether the codebase needs a reconciliation pass. I do this about once a month. Before drift detection, I did it never, and the codebase paid for it.
+
+**Layer 3: Reference validation.** Every import, every function call, every type reference in the changed files gets verified against the actual codebase. Not against type declarations or stubs -- against the real source. If the agent references `utils/formatCurrency` and that function does not exist, or exists with a different signature, the PR is blocked.
+
+This sounds like what the TypeScript compiler already does, and for type-checked codebases it partially is. But reference validation goes further: it checks that the referenced code does what the PR assumes it does, not just that it exists. If the agent calls `formatCurrency(amount)` and the real function signature is `formatCurrency(amount, locale)`, the type checker might or might not catch it depending on whether `locale` has a default value. Reference validation catches it because it compares usage patterns against the actual implementation. This is the layer that kills silent hallucination. Since adding it, I have caught zero hallucinated references in production. Before it, I was catching one or two a month, always after merge.
+
+**Layer 4: Multi-perspective review.** This is the four-reviewer system I described in the [SpecForge post](/blog/specforge-spec-driven-framework), adapted from spec review to code review. Four LLM reviewers run in parallel on every agent-generated PR, each with a different focus:
+
+- Backend: data consistency, transaction safety, schema compatibility, race conditions
+- Frontend: state management, error states, accessibility, user-facing behavior
+- Security: input validation, auth boundaries, secret exposure, injection surfaces
+- Quality: test coverage gaps, edge cases, observability, pattern consistency
+
+Each reviewer produces a severity-rated report. Red blocks merge. Yellow requires human review. Green passes. The reviewers disagree regularly, and that is the point. A change that looks fine from a backend perspective might have a security implication that only surfaces when you look at it through that lens.
+
+The false positive rate was high at first -- around 25% of reds were not real issues. After two months of tuning the reviewer prompts and adding examples of false positives to their context, the false positive rate dropped to around 8%. That is tolerable. I would rather review a few false alarms than miss a real architectural violation.
+
+## What changed when I turned this on
+
+Numbers, because claims without data are just opinions.
+
+Before evaluation layers: I was catching architectural issues an average of 11 days after merge. By then, other code had been built on top of the drifted patterns, making remediation expensive. Average time to fix a pattern inconsistency once identified: 4 hours, because it had usually propagated to 3-5 files.
+
+After evaluation layers: issues are caught pre-merge. Average time to fix: 15 minutes, because the pattern divergence is contained to the files in the current PR. The consistency score across the codebase went from 0.64 to 0.89 over three months. The number of "reconciliation passes" I needed to do dropped from weekly to monthly.
+
+The closest parallel I have for this kind of measurement-driven improvement is what we did with the [RAG pipeline](/blog/practical-rag-pipeline-guide), where retrieval precision went from 58% to 91% once we actually measured and optimized for it. The pattern is the same: you cannot improve what you do not measure, and the default metrics (tests passing, retrieval returning results) are not measuring what actually matters.
+
+Total pipeline time increase: about 90 seconds per PR. Consistency scoring takes 15 seconds. Drift detection takes 10 seconds. Reference validation takes 20 seconds. Multi-perspective review takes 40-50 seconds running in parallel. For context, the average agent-generated PR was already taking 3-4 minutes to run through CI. An extra 90 seconds is noise.
+
+## Traditional vs. AI-augmented vs. eval-driven
+
+This table captures the difference in what each pipeline catches.
+
+| Validation layer | Traditional CI/CD | AI-augmented pipeline | Eval-driven development |
+|---|---|---|---|
+| Syntax and type errors | Yes | Yes | Yes |
+| Test failures | Yes | Yes | Yes |
+| Lint and style violations | Yes | Yes | Yes |
+| Dependency conflicts | Yes | Yes | Yes |
+| Silent hallucination | No | Partial (if using grounding) | Yes (reference validation) |
+| Architectural drift | No | No | Yes (drift detection) |
+| Pattern inconsistency | No | No | Yes (consistency scoring) |
+| Version regression | No | Partial (if pinned) | Yes (reference validation) |
+| Context bleeding | No | No | Yes (multi-perspective review) |
+| Cross-service coherence | No | No | Yes (consistency scoring) |
+| Pipeline time overhead | Baseline | +30s | +90s |
+
+The middle column -- AI-augmented -- is what most teams do today: they add a grounding step or a CLAUDE.md file and hope the agent respects it. It helps. It is not enough. The grounding reduces hallucination but does nothing about drift, inconsistency, or context bleeding. You need evaluation layers that actively measure architectural coherence, not just verify that the code compiles.
+
+## The regulatory angle you cannot ignore
+
+The EU AI Act enters full enforcement in August 2026. Article 14 requires "human oversight" for high-risk AI systems, and Article 11 mandates "technical documentation" including traceability of AI-generated outputs. If you are building software that falls under the Act's scope -- and that scope is broader than most engineers realize -- you need to be able to demonstrate that AI-generated code was evaluated, not just tested.
+
+Evaluation-driven development is not just good engineering. It is becoming a compliance requirement. The traceability that evaluation layers provide -- which patterns were checked, what the consistency score was, which reviewers flagged what -- is exactly the kind of documentation the Act envisions. I wrote about the observability side of this in the [MCP servers post](/blog/building-production-mcp-servers): if you cannot observe what your AI systems are doing, you cannot govern them.
+
+This is not fear-mongering. It is timeline awareness. Teams that build evaluation layers now will have compliance documentation as a side effect. Teams that wait will be retrofitting under deadline pressure.
+
+## How to add this without slowing down delivery
+
+The implementation order matters. Do not try to add all four layers at once. Here is what I recommend based on what worked for me.
+
+**Week 1: Reference validation.** This is the highest-value, lowest-effort layer. Write a script that extracts all imports and function calls from changed files in a PR, then verifies each one against the codebase. Block the PR if anything does not resolve. This alone kills silent hallucination, which is the most dangerous failure mode because it can compile and pass tests.
+
+**Week 2-3: Consistency scoring.** Build a pattern extractor for your codebase. Start with error handling patterns and import styles -- those are the two areas where drift is most visible. Extract a baseline fingerprint, compare new PRs against it, and set an initial threshold of 0.6 (permissive). Tighten it over time as you see what triggers false positives.
+
+**Month 2: Multi-perspective review.** Add the four-reviewer system. Start with it in advisory mode (reports but does not block) so you can tune the prompts and calibrate severity thresholds. Move it to blocking mode once the false positive rate is under 15%.
+
+**Month 3: Drift detection.** Add the rolling window analysis. This is the least urgent layer because it tracks trends, not individual PRs. But it is the layer that tells you whether the other three are actually working over time.
+
+Each layer is independently valuable. You do not need all four to see improvement. Reference validation alone would have caught 60% of the issues I found in my Friday afternoon horror session. Consistency scoring would have caught the other 40%.
+
+## What this does not solve
+
+I have learned to be explicit about limitations, because frameworks that claim to solve everything solve nothing. For context on how I think about this, the [structured AI usage post](/blog/structured-ai-usage-for-developers) covers the broader philosophy.
+
+**It does not fix bad architecture.** If your codebase already has three error handling patterns because humans introduced them over the years, consistency scoring will faithfully score new code against an inconsistent baseline. You need to reconcile the baseline first. The tool measures consistency, not quality.
+
+**It does not replace domain expertise.** The multi-perspective reviewers are LLMs. They catch patterns. They do not catch business logic errors that require understanding what the business actually does. A reviewer can flag that your discount calculation lacks bounds checking. It cannot flag that the discount formula itself is wrong because it does not know your business rules.
+
+**It does not scale infinitely.** The consistency scoring and reference validation layers work well up to about 500K lines of code. Beyond that, the pattern extraction becomes expensive and the fingerprint gets noisy. For larger codebases, you need to scope the analysis to the relevant module or service, not the entire repo.
+
+**It does not eliminate the need for human review.** This is critical. Evaluation layers reduce the surface area that humans need to review. They do not eliminate it. The goal is to make human review efficient, not to remove it. If you use evaluation layers as an excuse to stop reading diffs, you will be back to my Friday afternoon in about three months.
+
+**It adds cognitive overhead.** There is now a new thing to understand, tune, and maintain. The consistency scoring thresholds need adjustment. The reviewer prompts need updating as the codebase evolves. The drift detection window needs calibrating. This is real work. It is less work than debugging pattern inconsistencies after they have propagated through the codebase, but it is not zero.
+
+## The uncomfortable conclusion
+
+We built CI/CD over two decades to catch the mistakes humans make. We now have a new kind of author -- one that does not make human mistakes but makes entirely different ones. The tooling has not caught up. Green builds give us confidence that was earned in a world where humans wrote the code, and that confidence is now misplaced.
+
+Evaluation-driven development is not a replacement for CI/CD. It is a new layer on top of it, purpose-built for the failure modes that AI agents introduce. Pattern consistency, architectural coherence, reference integrity, multi-perspective critique. These are not things traditional pipelines were designed to check. They are things we never needed to check, because human developers maintained them intuitively.
+
+AI agents do not have intuition. They have context windows. And if you do not evaluate what they produce beyond "does it compile and do the tests pass," you will end up where I ended up: a codebase that works perfectly and is slowly becoming unmaintainable.
+
+The fix is not to stop using agents. The fix is to stop trusting green builds as if they mean what they used to mean.
